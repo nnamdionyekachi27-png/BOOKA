@@ -153,6 +153,12 @@
 
   function isOwner(book) { return !!(session && book.owner === session.user.id); }
 
+  function backendMessage() {
+    return window.supabase
+      ? 'Backend not set up yet. Add your Supabase details in config.js.'
+      : 'The Supabase library did not load. Check your internet connection and refresh the page.';
+  }
+
   function openAuth() {
     var d = $('#auth-dialog');
     if (typeof d.showModal === 'function' && !d.open) d.showModal();
@@ -164,13 +170,13 @@
     function ui() { btn.textContent = session ? 'Log out' : 'Log in'; }
 
     btn.addEventListener('click', function () {
-      if (!sb) { toast('Backend not set up yet. Add your Supabase details in config.js.'); return; }
+      if (!sb) { toast(backendMessage()); return; }
       if (session) { sb.auth.signOut(); toast('Logged out.'); } else { say(''); openAuth(); }
     });
     $('#close-auth').addEventListener('click', function () { dlg.close(); });
 
     function go(mode) {
-      if (!sb) { say('Backend not set up yet. Add your Supabase details in config.js.'); return; }
+      if (!sb) { say(backendMessage()); return; }
       var email = form.elements.email.value.trim(), pw = form.elements.password.value;
       if (!email || pw.length < 6) { say('Enter your email and a password of at least 6 characters.'); return; }
       var call = mode === 'up' ? sb.auth.signUp({ email: email, password: pw }) : sb.auth.signInWithPassword({ email: email, password: pw });
@@ -642,7 +648,7 @@
       e.preventDefault();
       errorBox.hidden = true;
 
-      if (!sb) { fail('The backend is not set up yet. Add your Supabase details in config.js.'); return; }
+      if (!sb) { fail(backendMessage()); return; }
       if (!session) { fail('Log in or create a free writer account to publish.'); openAuth(); return; }
 
       var title = form.elements.title.value.trim();
