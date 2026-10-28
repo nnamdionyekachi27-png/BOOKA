@@ -1,4 +1,4 @@
-/* ===== BOOKA: draw.js =====
+/* ===== Treeshelf: draw.js =====
    Navigation, Explore cards, uploads, and the reader.
    Books and accounts live in Supabase (see SETUP.md). */
 
@@ -100,7 +100,7 @@
   }
 
   /* ---------- Backend (Supabase) ---------- */
-  var cfg = window.BOOKA_CONFIG || {};
+  var cfg = window.Treeshelf_CONFIG || {};
   var sb = null;
   var session = null;
   var uploaded = [];
@@ -177,7 +177,7 @@
       call.then(function (r) {
         if (r.error) { say(r.error.message); return; }
         if (mode === 'up' && !r.data.session) { say('Account created. Check your email to confirm it, then log in.'); return; }
-        form.reset(); say(''); dlg.close(); toast('Welcome to BOOKA.');
+        form.reset(); say(''); dlg.close(); toast('Welcome to Treeshelf.');
       });
     }
     form.addEventListener('submit', function (e) { e.preventDefault(); go('in'); });
@@ -262,6 +262,8 @@
     var tags = [el('span', { class: 'tag', text: book.genre })];
     tags.push(el('span', { class: real ? 'tag new' : 'tag', text: real ? (book.reads || 0) + ' reads' : 'Sample' }));
 
+    if (book.type === 'chapters') tags.push(el('span', { class: 'tag', text: 'Serial' }));
+
     var actions = [el('button', { type: 'button', class: 'btn btn-primary btn-small', text: 'Read', onclick: function () { openReader(book); } })];
     if (real && book.fileUrl) actions.push(el('a', { class: 'btn btn-small', text: 'Download', href: book.fileUrl, target: '_blank', rel: 'noopener' }));
     if (real) {
@@ -269,6 +271,7 @@
       actions.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Report', onclick: function () { reportBook(book); } }));
     }
     if (isOwner(book)) {
+      actions.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Manage', onclick: function () { openManage(book); } }));
       actions.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: function () { removeBook(book); } }));
     }
 
@@ -359,6 +362,9 @@
     } else if (book.type === 'docx' && book.fileUrl) {
       body.appendChild(note('Opening your document...'));
       renderDocx(book, body);
+    } else if (book.type === 'chapters') {
+      body.appendChild(note('Loading chapters...'));
+      renderChapters(book, body);
     } else if (book.type === 'doc') {
       body.appendChild(note('This older .doc file cannot be shown inside the reader. Use Download to open it in Word.'));
     } else {
@@ -411,6 +417,207 @@
     });
   }
 
+  /* ---------- Chapters: reading ---------- */
+  function renderChapters(book, body) {
+    sb.from('chapters').select('id,position,title,body').eq('book_id', book.id)
+      .order('position', { ascending: true }).then(function (res) {
+        body.innerHTML = '';
+        var list = res.error ? [] : res.data;
+        if (!list.length) {
+          body.appendChild(note('The author has not published any chapters yet. Check back soon.'));
+          return;
+        }
+        var page = el('article', { class: 'reading-page' });
+        body.appendChild(page);
+
+        function show(i) {
+          page.innerHTML = '';
+          var sel = el('select', { 'aria-label': 'Choose chapter' });
+          list.forEach(function (c, idx) {
+            var o = el('option', { value: String(idx), text: (idx + 1) + '. ' + c.title });
+            if (idx === i) o.selected = true;
+            sel.appendChild(o);
+          });
+          sel.addEventListener('change', function () { show(Number(sel.value)); });
+          page.appendChild(el('div', { class: 'chapter-nav' }, [sel]));
+          page.appendChild(el('h2', { text: list[i].title }));
+
+          var text = textToPage(list[i].body || '');
+          while (text.firstChild) page.appendChild(text.firstChild);
+
+          var prev = el('button', { type: 'button', class: 'btn btn-small', text: 'Previous chapter', onclick: function () { show(i - 1); } });
+          var next = el('button', { type: 'button', class: 'btn btn-small btn-primary', text: 'Next chapter', onclick: function () { show(i + 1); } });
+          if (i === 0) prev.disabled = true;
+          if (i === list.length - 1) next.disabled = true;
+          page.appendChild(el('div', { class: 'chapter-nav' }, [prev, next]));
+          body.scrollTop = 0;
+          setReadingSize();
+        }
+        show(0);
+      });
+  }
+
+  /* ---------- Manage a book: edit details and chapters ---------- */
+  function field(label, input) {
+    return el('label', { class: 'field' }, [el('span', { class: 'field-label', text: label }), input]);
+  }
+
+  function actionBtn(text, fn, disabled, danger) {
+    var b = el('button', { type: 'button', class: 'btn btn-small' + (danger ? ' btn-danger' : ''), text: text, onclick: fn });
+    if (disabled) b.disabled = true;
+    return b;
+  }
+
+  function chaptersSection(book) {
+    var wrap = el('div', { class: 'chapters-admin' });
+    wrap.appendChild(el('h3', { text: 'Chapters' }));
+    var listBox = el('div', { class: 'chapter-list' });
+    wrap.appendChild(listBox);
+
+    var form = el('form', { class: 'chapter-form', novalidate: '' });
+    var titleIn = el('input', { type: 'text', maxlength: '100', placeholder: 'Chapter title' });
+    var bodyIn = el('textarea', { rows: '10', placeholder: 'Paste or write the chapter here' });
+    var msg = el('p', { class: 'form-error', hidden: '' });
+    var saveBtn = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Add chapter' });
+    var cancelBtn = el('button', { type: 'button', class: 'btn', text: 'Cancel edit', hidden: '' });
+    [field('Chapter title', titleIn), field('Chapter text', bodyIn), msg, saveBtn, cancelBtn].forEach(function (n) { form.appendChild(n); });
+    wrap.appendChild(form);
+
+    var items = [];
+    var editing = null;
+
+    function resetForm() {
+      editing = null;
+      titleIn.value = ''; bodyIn.value = '';
+      saveBtn.textContent = 'Add chapter';
+      cancelBtn.hidden = true;
+    }
+
+    function startEdit(c) {
+      editing = c;
+      titleIn.value = c.title; bodyIn.value = c.body || '';
+      saveBtn.textContent = 'Save chapter';
+      cancelBtn.hidden = false;
+      titleIn.focus();
+    }
+
+    function load() {
+      return sb.from('chapters').select('id,position,title,body').eq('book_id', book.id)
+        .order('position', { ascending: true }).then(function (r) {
+          items = r.error ? [] : r.data;
+          draw();
+        });
+    }
+
+    function draw() {
+      listBox.innerHTML = '';
+      if (!items.length) {
+        listBox.appendChild(el('p', { class: 'sub', text: 'No chapters yet. Add your first one below.' }));
+        return;
+      }
+      items.forEach(function (c, i) {
+        listBox.appendChild(el('div', { class: 'chapter-row' }, [
+          el('span', { class: 'chapter-name', text: (i + 1) + '. ' + c.title }),
+          el('span', { class: 'chapter-btns' }, [
+            actionBtn('Edit', function () { startEdit(c); }),
+            actionBtn('Up', function () { move(i, -1); }, i === 0),
+            actionBtn('Down', function () { move(i, 1); }, i === items.length - 1),
+            actionBtn('Delete', function () { remove(c); }, false, true)
+          ])
+        ]));
+      });
+    }
+
+    function move(i, dir) {
+      var a = items[i], o = items[i + dir];
+      if (!o) return;
+      Promise.all([
+        sb.from('chapters').update({ position: o.position }).eq('id', a.id),
+        sb.from('chapters').update({ position: a.position }).eq('id', o.id)
+      ]).then(load);
+    }
+
+    function remove(c) {
+      if (!window.confirm('Delete the chapter "' + c.title + '"?')) return;
+      sb.from('chapters').delete().eq('id', c.id).then(function () { if (editing && editing.id === c.id) resetForm(); load(); });
+    }
+
+    cancelBtn.addEventListener('click', resetForm);
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      msg.hidden = true;
+      var t = titleIn.value.trim(), x = bodyIn.value.trim();
+      if (!t || !x) { msg.textContent = 'Add a chapter title and some text.'; msg.hidden = false; return; }
+      var wasEditing = !!editing, op;
+      if (wasEditing) {
+        op = sb.from('chapters').update({ title: t, body: x }).eq('id', editing.id);
+      } else {
+        var pos = items.length ? Math.max.apply(null, items.map(function (c) { return c.position; })) + 1 : 1;
+        op = sb.from('chapters').insert({ book_id: book.id, title: t, body: x, position: pos });
+      }
+      saveBtn.disabled = true;
+      op.then(function (r) {
+        saveBtn.disabled = false;
+        if (r.error) { msg.textContent = r.error.message; msg.hidden = false; return; }
+        resetForm();
+        toast(wasEditing ? 'Chapter saved.' : 'Chapter published.');
+        return load();
+      });
+    });
+
+    load();
+    return wrap;
+  }
+
+  function openManage(book) {
+    var dlg = $('#manage-dialog'), box = $('#manage-body');
+    $('#manage-title').textContent = 'Manage: ' + book.title;
+    box.innerHTML = '';
+
+    var f = el('form', { class: 'book-form', novalidate: '' });
+    var title = el('input', { type: 'text', maxlength: '80' }); title.value = book.title;
+    var author = el('input', { type: 'text', maxlength: '60' }); author.value = book.author;
+    var genre = el('select');
+    GENRES.forEach(function (g) { genre.appendChild(el('option', { value: g, text: g })); });
+    genre.value = book.genre;
+    var blurb = el('textarea', { rows: '3', maxlength: '240' }); blurb.value = book.blurb || '';
+
+    var parts = [field('Book title', title), field('Author or pen name', author), field('Genre', genre), field('Short description', blurb)];
+    var storyIn = null;
+    if (book.type === 'text') {
+      storyIn = el('textarea', { rows: '10' });
+      storyIn.value = book.text || '';
+      parts.push(field('Story text', storyIn));
+    }
+    var msg = el('p', { class: 'form-error', hidden: '' });
+    var save = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Save changes' });
+    parts.push(msg); parts.push(save);
+    parts.forEach(function (p) { f.appendChild(p); });
+
+    f.addEventListener('submit', function (e) {
+      e.preventDefault();
+      msg.hidden = true;
+      if (!title.value.trim() || !author.value.trim()) { msg.textContent = 'Title and author cannot be empty.'; msg.hidden = false; return; }
+      var changes = { title: title.value.trim(), author: author.value.trim(), genre: genre.value, blurb: blurb.value.trim() };
+      if (storyIn) changes.body = storyIn.value;
+      save.disabled = true;
+      sb.from('books').update(changes).eq('id', book.id).select().single().then(function (r) {
+        save.disabled = false;
+        if (r.error) { msg.textContent = r.error.message; msg.hidden = false; return; }
+        var fresh = rowToBook(r.data);
+        Object.keys(fresh).forEach(function (k) { book[k] = fresh[k]; });
+        $('#manage-title').textContent = 'Manage: ' + book.title;
+        renderGrid();
+        toast('Changes saved.');
+      });
+    });
+
+    box.appendChild(f);
+    if (book.type === 'chapters') box.appendChild(chaptersSection(book));
+    if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+  }
+
   /* ---------- Upload form (used on Write page and in Explore dialog) ---------- */
   function extensionOf(name) {
     var m = /\.([a-z0-9]+)$/i.exec(name || '');
@@ -424,6 +631,10 @@
     GENRES.forEach(function (g) { genreSelect.appendChild(el('option', { value: g, text: g })); });
     var errorBox = $('.form-error', form);
     var submitBtn = $('button[type="submit"]', form);
+    var optionalSources = $all('.optional-source', form);
+    form.elements.serial.addEventListener('change', function () {
+      optionalSources.forEach(function (n) { n.hidden = form.elements.serial.checked; });
+    });
 
     function fail(msg) { errorBox.textContent = msg; errorBox.hidden = false; }
 
@@ -438,19 +649,20 @@
       var author = form.elements.author.value.trim();
       var text = form.elements.text.value.trim();
       var file = form.elements.file.files[0];
+      var serial = form.elements.serial.checked;
 
       if (!title) { fail('Add a title for your book.'); form.elements.title.focus(); return; }
       if (!author) { fail('Add your name or a pen name.'); form.elements.author.focus(); return; }
-      if (!file && !text) { fail('Attach a file or write your story in the text box.'); return; }
+      if (!serial && !file && !text) { fail('Attach a file or write your story in the text box.'); return; }
 
       var meta = {
         title: title, author: author, genre: form.elements.genre.value,
-        blurb: form.elements.blurb.value.trim(), type: 'text', body: text || null, fileName: null
+        blurb: form.elements.blurb.value.trim(), type: serial ? 'chapters' : 'text', body: serial ? null : (text || null), fileName: null
       };
       var upload = null;
       var prep = Promise.resolve();
 
-      if (file) {
+      if (file && !serial) {
         var ext = extensionOf(file.name);
         if (['pdf', 'docx', 'doc', 'txt'].indexOf(ext) === -1) { fail('That file type is not supported. Use PDF, DOCX or TXT.'); return; }
         if (file.size > MAX_FILE_BYTES) { fail('That file is larger than 25 MB. Try compressing it or splitting the book.'); return; }
@@ -469,6 +681,7 @@
         renderGrid();
         toast('"' + book.title + '" is now on Explore.');
         if (onPublished) onPublished();
+        if (book.type === 'chapters') openManage(book);
       }).catch(function (err) {
         fail('Your book could not be saved. ' + (err && err.message ? err.message : 'Please try again.'));
       }).then(function () {
@@ -481,6 +694,10 @@
   }
 
   function initForms() {
+    var manageDlg = $('#manage-dialog');
+    $('#close-manage').addEventListener('click', function () { manageDlg.close(); });
+    manageDlg.addEventListener('click', function (e) { if (e.target === manageDlg) manageDlg.close(); });
+
     $('#write-form-slot').appendChild(buildForm(function () { showView('explore'); }));
 
     var dialog = $('#upload-dialog');
