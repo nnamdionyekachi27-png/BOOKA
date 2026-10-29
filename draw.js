@@ -10,7 +10,7 @@
   var GENRES = [
     'Short story', 'Novel', 'Poetry', 'Romance', 'Fantasy', 'Science fiction',
     'Mystery and thriller', 'Horror', 'Memoir and essay', "Children's story",
-    'Faith and reflection', 'School Notes', 'Educational Guides', 'Other'
+    'Faith and reflection', 'Other'
   ];
   var COVER_COLOURS = [
     '#1f4e5f', '#5a3e5c', '#7a4a2b', '#2f5d3a', '#6b2f3a',
@@ -107,9 +107,11 @@
 
   function rowToBook(r) {
     var url = r.file_path ? sb.storage.from('books').getPublicUrl(r.file_path).data.publicUrl : null;
+    var coverUrl = r.cover_path ? sb.storage.from('books').getPublicUrl(r.cover_path).data.publicUrl : null;
     return {
       id: r.id, title: r.title, author: r.author, genre: r.genre, blurb: r.blurb, type: r.type,
       text: r.body, fileName: r.file_name, filePath: r.file_path, fileUrl: url,
+      coverPath: r.cover_path, coverUrl: coverUrl,
       reads: r.reads, owner: r.owner, created: new Date(r.created_at).getTime()
     };
   }
@@ -121,18 +123,57 @@
     });
   }
 
-  function saveBook(meta, file) {
+  function resizeCover(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      var url = URL.createObjectURL(file);
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var scale = Math.min(1, 600 / img.width);
+        var w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(function (blob) {
+          if (blob) resolve(blob); else reject(new Error('Could not process the cover image.'));
+        }, 'image/jpeg', 0.85);
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('That image could not be read. Try a JPG or PNG.'));
+      };
+      img.src = url;
+    });
+  }
+
+  function uploadCover(blob) {
+    var path = session.user.id + '/covers/' + Date.now() + '.jpg';
+    return sb.storage.from('books').upload(path, blob, { contentType: 'image/jpeg' }).then(function (r) {
+      if (r.error) throw r.error;
+      return path;
+    });
+  }
+
+  function saveBook(meta, file, coverBlob) {
     var path = null;
+    var coverPath = null;
     var step = Promise.resolve();
     if (file) {
       path = session.user.id + '/' + Date.now() + '-' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      step = sb.storage.from('books').upload(path, file, { contentType: file.type || undefined })
-        .then(function (r) { if (r.error) throw r.error; });
+      step = step.then(function () {
+        return sb.storage.from('books').upload(path, file, { contentType: file.type || undefined })
+          .then(function (r) { if (r.error) throw r.error; });
+      });
+    }
+    if (coverBlob) {
+      step = step.then(function () { return uploadCover(coverBlob); }).then(function (p) { coverPath = p; });
     }
     return step.then(function () {
       return sb.from('books').insert({
         title: meta.title, author: meta.author, genre: meta.genre, blurb: meta.blurb,
-        type: meta.type, body: meta.body, file_path: path, file_name: meta.fileName
+        type: meta.type, body: meta.body, file_path: path, file_name: meta.fileName, cover_path: coverPath
       }).select().single();
     }).then(function (r) {
       if (r.error) throw r.error;
@@ -143,7 +184,8 @@
   function deleteBook(book) {
     return sb.from('books').delete().eq('id', book.id).then(function (r) {
       if (r.error) throw r.error;
-      if (book.filePath) return sb.storage.from('books').remove([book.filePath]);
+      var files = [book.filePath, book.coverPath].filter(Boolean);
+      if (files.length) return sb.storage.from('books').remove(files);
     });
   }
 
@@ -351,6 +393,10 @@
       el('span', { class: 'cover-title', text: book.title }),
       el('span', { class: 'cover-author', text: book.author })
     ]);
+    if (book.coverUrl) {
+      btn.classList.add('has-image');
+      btn.style.backgroundImage = 'url("' + book.coverUrl.replace(/"/g, '%22') + '")';
+    }
     return btn;
   }
 
@@ -563,8 +609,12 @@
           page.appendChild(el('div', { class: 'chapter-nav' }, [prev, next]));
           body.scrollTop = 0;
           setReadingSize();
+          try { localStorage.setItem('ts-chapter-' + book.id, String(i)); } catch (e) { /* storage unavailable */ }
         }
-        show(0);
+        var saved = 0;
+        try { saved = parseInt(localStorage.getItem('ts-chapter-' + book.id), 10) || 0; } catch (e) { saved = 0; }
+        if (saved < 0 || saved >= list.length) saved = 0;
+        show(saved);
       });
   }
 
@@ -694,7 +744,13 @@
     genre.value = book.genre;
     var blurb = el('textarea', { rows: '3', maxlength: '240' }); blurb.value = book.blurb || '';
 
-    var parts = [field('Book title', title), field('Author or pen name', author), field('Genre', genre), field('Short description', blurb)];
+    var coverIn = el('input', { type: 'file', accept: 'image/*' });
+    var parts = [field('Book title', title), field('Author or pen name', author), field('Genre', genre), field('Short description', blurb), field(book.coverPath ? 'Change cover image' : 'Cover image (optional)', coverIn)];
+    var removeCover = null;
+    if (book.coverPath) {
+      removeCover = el('input', { type: 'checkbox' });
+      parts.push(el('label', { class: 'check' }, [removeCover, el('span', { text: 'Remove the current cover' })]));
+    }
     var storyIn = null;
     if (book.type === 'text') {
       storyIn = el('textarea', { rows: '10' });
@@ -712,15 +768,33 @@
       if (!title.value.trim() || !author.value.trim()) { msg.textContent = 'Title and author cannot be empty.'; msg.hidden = false; return; }
       var changes = { title: title.value.trim(), author: author.value.trim(), genre: genre.value, blurb: blurb.value.trim() };
       if (storyIn) changes.body = storyIn.value;
+      var oldCover = book.coverPath;
+      var newCover = coverIn.files[0];
+      var pre = Promise.resolve();
+      if (newCover) {
+        if (newCover.type.indexOf('image/') !== 0) { msg.textContent = 'The cover must be an image (JPG or PNG).'; msg.hidden = false; return; }
+        pre = resizeCover(newCover).then(uploadCover).then(function (p) { changes.cover_path = p; });
+      } else if (removeCover && removeCover.checked) {
+        changes.cover_path = null;
+      }
       save.disabled = true;
-      sb.from('books').update(changes).eq('id', book.id).select().single().then(function (r) {
+      pre.then(function () {
+        return sb.from('books').update(changes).eq('id', book.id).select().single();
+      }).then(function (r) {
         save.disabled = false;
         if (r.error) { msg.textContent = r.error.message; msg.hidden = false; return; }
         var fresh = rowToBook(r.data);
+        if (Object.prototype.hasOwnProperty.call(changes, 'cover_path') && oldCover) sb.storage.from('books').remove([oldCover]);
+        coverIn.value = '';
+        if (removeCover) removeCover.checked = false;
         Object.keys(fresh).forEach(function (k) { book[k] = fresh[k]; });
         $('#manage-title').textContent = 'Manage: ' + book.title;
         renderGrid();
         toast('Changes saved.');
+      }).catch(function (err) {
+        save.disabled = false;
+        msg.textContent = (err && err.message) || 'Could not save your changes.';
+        msg.hidden = false;
       });
     });
 
@@ -761,6 +835,10 @@
       var text = form.elements.text.value.trim();
       var file = form.elements.file.files[0];
       var serial = form.elements.serial.checked;
+      var coverFile = form.elements.cover.files[0];
+      var coverBlob = null;
+      if (coverFile && coverFile.type.indexOf('image/') !== 0) { fail('The cover must be an image (JPG or PNG).'); return; }
+      if (coverFile && coverFile.size > 10 * 1024 * 1024) { fail('The cover image is larger than 10 MB. Choose a smaller one.'); return; }
 
       if (!title) { fail('Add a title for your book.'); form.elements.title.focus(); return; }
       if (!author) { fail('Add your name or a pen name.'); form.elements.author.focus(); return; }
@@ -786,7 +864,9 @@
 
       submitBtn.disabled = true;
       submitBtn.textContent = 'Publishing...';
-      prep.then(function () { return saveBook(meta, upload); }).then(function (book) {
+      prep.then(function () {
+        return coverFile ? resizeCover(coverFile).then(function (b) { coverBlob = b; }) : null;
+      }).then(function () { return saveBook(meta, upload, coverBlob); }).then(function (book) {
         uploaded.unshift(book);
         form.reset();
         renderGrid();

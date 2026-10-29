@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="lines.css?v=4">
+  <link rel="stylesheet" href="lines.css?v=5">
 </head>
 <body>
 
@@ -69,6 +69,7 @@
         <ul>
           <li><strong>Upload a file.</strong> PDF, Word (.docx) and plain text files are all supported. Use PDF when layout matters, and Word or text when you want readers to be able to resize the text.</li>
           <li><strong>Or write it here.</strong> No finished file yet? Paste or type your chapter into the box. It will be shown to readers as a clean, readable page.</li>
+          <li><strong>Add a cover.</strong> Upload a cover image and it will appear on your book&rsquo;s card on Explore. It is resized automatically, so a photo straight from your phone is fine.</li>
           <li><strong>Publish a novel chapter by chapter.</strong> Tick the chapter option when you publish, then add chapters whenever they are ready. Readers can jump between chapters, and you can edit or reorder them at any time.</li>
           <li><strong>Choose how you appear.</strong> Use your real name or a pen name. It is your decision.</li>
           <li><strong>Add as many books as you like.</strong> One poem, a short story series or a twenty-chapter novel. There is no limit on how much you can share.</li>
@@ -273,6 +274,10 @@
         <span class="field-label">Short description</span>
         <textarea name="blurb" rows="3" maxlength="240" placeholder="One or two sentences that make a reader curious"></textarea>
       </label>
+      <label class="field">
+        <span class="field-label">Cover image (optional, JPG or PNG)</span>
+        <input type="file" name="cover" accept="image/*">
+      </label>
       <label class="check">
         <input type="checkbox" name="serial">
         <span>This is a novel I will publish chapter by chapter</span>
@@ -294,6 +299,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
   <script src="config.js?v=3"></script>
-  <script src="draw.js?v=4"></script>
+  <script src="draw.js?v=5"></script>
 </body>
 </html>
