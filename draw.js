@@ -10,7 +10,7 @@
   var GENRES = [
     'Short story', 'Novel', 'Poetry', 'Romance', 'Fantasy', 'Science fiction',
     'Mystery and thriller', 'Horror', 'Memoir and essay', "Children's story",
-    'Faith and reflection', 'Other'
+    'Faith and reflection', 'School Notes', 'Educational Guides', 'Other'
   ];
   var COVER_COLOURS = [
     '#1f4e5f', '#5a3e5c', '#7a4a2b', '#2f5d3a', '#6b2f3a',
