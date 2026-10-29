@@ -100,7 +100,7 @@
   }
 
   /* ---------- Backend (Supabase) ---------- */
-  var cfg = window.Treeshelf_CONFIG || {};
+  var cfg = window.BOOKA_CONFIG || window.Treeshelf_CONFIG || window.TREESHELF_CONFIG || {};
   var sb = null;
   var session = null;
   var uploaded = [];
