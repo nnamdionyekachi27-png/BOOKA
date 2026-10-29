@@ -159,40 +159,145 @@
       : 'The Supabase library did not load. Check your internet connection and refresh the page.';
   }
 
+  var resetAuthForm = function () {};
+
   function openAuth() {
+    resetAuthForm();
     var d = $('#auth-dialog');
     if (typeof d.showModal === 'function' && !d.open) d.showModal();
   }
 
   function initAuth() {
-    var dlg = $('#auth-dialog'), form = $('#auth-form'), msg = $('#auth-msg'), btn = $('#auth-btn');
-    function say(t) { msg.textContent = t; msg.hidden = !t; }
-    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; }
+    var dlg = $('#auth-dialog'), form = $('#auth-form'), btn = $('#auth-btn');
+    var msg = $('#auth-msg'), ok = $('#auth-ok'), title = $('#auth-title'), intro = $('#auth-intro');
+    var submit = $('#auth-submit'), pwInput = form.elements.password;
+    var tabs = $('.auth-tabs'), tabIn = $('#tab-in'), tabUp = $('#tab-up');
+    var toggle = $('#pw-toggle');
+    var mode = 'in';
+
+    var EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+    var EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 19c-6.4 0-10-7-10-7a18.5 18.5 0 0 1 4.06-5.06M9.9 4.24A10.9 10.9 0 0 1 12 5c6.4 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+    var TEXT = {
+      'in':     ['Welcome back', 'Log in to publish and manage your books.', 'Log in'],
+      'up':     ['Join Treeshelf', 'Create a free writer account. Readers never need one.', 'Create account'],
+      'forgot': ['Reset your password', 'Enter your email and we will send you a reset link.', 'Send reset link'],
+      'reset':  ['Choose a new password', 'Enter a new password for your account.', 'Save new password']
+    };
+
+    function say(t) { msg.textContent = t; msg.hidden = !t; ok.hidden = true; }
+    function good(t) { ok.textContent = t; ok.hidden = !t; msg.hidden = true; }
+    function busy(b) { submit.disabled = b; }
+
+    function showPassword(show) {
+      pwInput.type = show ? 'text' : 'password';
+      toggle.innerHTML = show ? EYE_OFF : EYE;
+      toggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+      toggle.setAttribute('aria-pressed', show ? 'true' : 'false');
+    }
+
+    function friendly(text) {
+      if (/invalid login/i.test(text)) return 'Wrong email or password. Try again, or use Forgot password.';
+      if (/already registered|already been registered/i.test(text)) return 'That email already has an account. Choose Log in instead.';
+      if (/rate limit/i.test(text)) return 'Too many attempts. Please wait a few minutes and try again.';
+      return text;
+    }
+
+    function setMode(m) {
+      mode = m;
+      say(''); good('');
+      var isTab = (m === 'in' || m === 'up');
+      tabs.hidden = !isTab;
+      tabIn.classList.toggle('active', m === 'in');
+      tabUp.classList.toggle('active', m === 'up');
+      tabIn.setAttribute('aria-selected', m === 'in' ? 'true' : 'false');
+      tabUp.setAttribute('aria-selected', m === 'up' ? 'true' : 'false');
+      $('#email-field').hidden = (m === 'reset');
+      $('#pw-field').hidden = (m === 'forgot');
+      $('#forgot-row').hidden = (m !== 'in');
+      $('#back-row').hidden = (m !== 'forgot');
+      $('#pw-label').textContent = (m === 'reset') ? 'New password' : 'Password';
+      pwInput.setAttribute('autocomplete', m === 'in' ? 'current-password' : 'new-password');
+      showPassword(false);
+      title.textContent = TEXT[m][0];
+      intro.textContent = TEXT[m][1];
+      submit.textContent = TEXT[m][2];
+    }
+
+    resetAuthForm = function () { setMode('in'); };
 
     btn.addEventListener('click', function () {
       if (!sb) { toast(backendMessage()); return; }
-      if (session) { sb.auth.signOut(); toast('Logged out.'); } else { say(''); openAuth(); }
+      if (session) { sb.auth.signOut(); toast('Logged out.'); } else { openAuth(); }
     });
     $('#close-auth').addEventListener('click', function () { dlg.close(); });
+    tabIn.addEventListener('click', function () { setMode('in'); });
+    tabUp.addEventListener('click', function () { setMode('up'); });
+    $('#forgot-btn').addEventListener('click', function () { setMode('forgot'); });
+    $('#back-btn').addEventListener('click', function () { setMode('in'); });
+    toggle.addEventListener('click', function () { showPassword(pwInput.type === 'password'); });
 
-    function go(mode) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      say('');
       if (!sb) { say(backendMessage()); return; }
-      var email = form.elements.email.value.trim(), pw = form.elements.password.value;
-      if (!email || pw.length < 6) { say('Enter your email and a password of at least 6 characters.'); return; }
-      var call = mode === 'up' ? sb.auth.signUp({ email: email, password: pw }) : sb.auth.signInWithPassword({ email: email, password: pw });
+      var email = form.elements.email.value.trim();
+      var pw = pwInput.value;
+      var emailOk = /^\S+@\S+\.\S+$/.test(email);
+
+      if (mode === 'forgot') {
+        if (!emailOk) { say('Enter the email you signed up with.'); return; }
+        busy(true);
+        sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0] }).then(function (r) {
+          busy(false);
+          if (r.error) { say(friendly(r.error.message)); return; }
+          good('If that email has an account, a reset link is on its way. Check your inbox and spam folder.');
+        });
+        return;
+      }
+
+      if (mode === 'reset') {
+        if (pw.length < 6) { say('Use at least 6 characters.'); return; }
+        busy(true);
+        sb.auth.updateUser({ password: pw }).then(function (r) {
+          busy(false);
+          if (r.error) { say(friendly(r.error.message)); return; }
+          form.reset(); dlg.close(); setMode('in');
+          toast('Password updated. You are logged in.');
+        });
+        return;
+      }
+
+      if (!emailOk) { say('Enter a valid email address.'); return; }
+      if (pw.length < 6) { say('Your password must be at least 6 characters.'); return; }
+      busy(true);
+      var creating = (mode === 'up');
+      var call = creating
+        ? sb.auth.signUp({ email: email, password: pw })
+        : sb.auth.signInWithPassword({ email: email, password: pw });
       call.then(function (r) {
-        if (r.error) { say(r.error.message); return; }
-        if (mode === 'up' && !r.data.session) { say('Account created. Check your email to confirm it, then log in.'); return; }
-        form.reset(); say(''); dlg.close(); toast('Welcome to Treeshelf.');
+        busy(false);
+        if (r.error) { say(friendly(r.error.message)); return; }
+        if (creating && !r.data.session) { good('Account created. Check your email to confirm it, then log in.'); return; }
+        form.reset(); dlg.close();
+        toast(creating ? 'Welcome to Treeshelf.' : 'Welcome back.');
       });
-    }
-    form.addEventListener('submit', function (e) { e.preventDefault(); go('in'); });
-    $('#signup-btn').addEventListener('click', function () { go('up'); });
+    });
+
+    setMode('in');
 
     if (sb) {
-      sb.auth.onAuthStateChange(function (_event, s) { session = s; ui(); renderGrid(); });
+      sb.auth.onAuthStateChange(function (event, s) {
+        session = s; ui(); renderGrid();
+        if (event === 'PASSWORD_RECOVERY') {
+          setMode('reset');
+          if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+        }
+      });
       sb.auth.getSession().then(function (r) { session = r.data.session; ui(); renderGrid(); });
     }
+
+    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; }
   }
 
   /* ---------- Navigation ---------- */

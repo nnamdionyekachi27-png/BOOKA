@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="lines.css">
+  <link rel="stylesheet" href="lines.css?v=4">
 </head>
 <body>
 
@@ -196,17 +196,33 @@
   <!-- Log in / sign up -->
   <dialog id="auth-dialog" aria-labelledby="auth-title">
     <div class="dialog-head">
-      <h2 id="auth-title">Writer account</h2>
+      <h2 id="auth-title">Welcome back</h2>
       <button type="button" class="icon-btn" id="close-auth" aria-label="Close">&times;</button>
     </div>
+
+    <div class="auth-tabs" role="tablist">
+      <button type="button" role="tab" id="tab-in" class="auth-tab active" aria-selected="true">Log in</button>
+      <button type="button" role="tab" id="tab-up" class="auth-tab" aria-selected="false">Create account</button>
+    </div>
+    <p class="auth-intro" id="auth-intro">Log in to publish and manage your books.</p>
+
     <form class="book-form" id="auth-form" novalidate>
-      <label class="field"><span class="field-label">Email</span>
-        <input type="text" name="email" autocomplete="email" inputmode="email"></label>
-      <label class="field"><span class="field-label">Password (at least 6 characters)</span>
-        <input type="password" name="password" autocomplete="current-password" class="auth-pw"></label>
+      <label class="field" id="email-field">
+        <span class="field-label">Email</span>
+        <input type="text" name="email" autocomplete="email" inputmode="email" placeholder="you@example.com">
+      </label>
+      <label class="field" id="pw-field">
+        <span class="field-label" id="pw-label">Password</span>
+        <span class="pw-wrap">
+          <input type="password" name="password" autocomplete="current-password" placeholder="At least 6 characters">
+          <button type="button" class="pw-toggle" id="pw-toggle" aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </span>
+      </label>
+      <p class="auth-row" id="forgot-row"><button type="button" class="link-btn" id="forgot-btn">Forgot password?</button></p>
       <p class="form-error" id="auth-msg" role="alert" hidden></p>
-      <button type="submit" class="btn btn-primary">Log in</button>
-      <button type="button" class="btn" id="signup-btn">Create account</button>
+      <p class="form-ok" id="auth-ok" role="status" hidden></p>
+      <button type="submit" class="btn btn-primary" id="auth-submit">Log in</button>
+      <p class="auth-row center" id="back-row" hidden><button type="button" class="link-btn" id="back-btn">Back to log in</button></p>
     </form>
   </dialog>
 
@@ -278,6 +294,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
   <script src="config.js?v=3"></script>
-  <script src="draw.js?v=3"></script>
+  <script src="draw.js?v=4"></script>
 </body>
 </html>
