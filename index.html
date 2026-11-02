@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="lines.css?v=5">
+  <link rel="stylesheet" href="lines.css?v=6">
 </head>
 <body>
 
@@ -98,7 +98,7 @@
         <p>Amateur writing is often a very personal thing, and some of it is fragile. A few small habits keep the community welcoming for everyone:</p>
         <ul>
           <li>Upload only work you wrote yourself or have permission to share. Copying another author&rsquo;s book is not allowed.</li>
-          <li>Keep content suitable for a general audience. Mark mature themes clearly in the description so readers can choose.</li>
+          <li>Keep content suitable for a general audience. Sexually explicit material is not allowed, and our admins may remove any book that breaks these rules.</li>
           <li>If you tell an author what you think, tell them what worked first, then what could grow. Everyone here is learning.</li>
           <li>Respect authors&rsquo; credit. If you share a book with a friend, share the name of its writer too.</li>
         </ul>
@@ -227,6 +227,21 @@
     </form>
   </dialog>
 
+  <!-- Pledge shown before publishing -->
+  <dialog id="pledge-dialog" aria-labelledby="pledge-title">
+    <h2 id="pledge-title">Before you publish</h2>
+    <p class="pledge-note">Feel free to write whatever is on your mind. This is your space to share your voice, your stories and your ideas.</p>
+    <p class="pledge-red">I promise not to upload copyrighted material or sexually explicit content.</p>
+    <label class="check">
+      <input type="checkbox" id="pledge-check">
+      <span>I agree and make this promise</span>
+    </label>
+    <div class="pledge-actions">
+      <button type="button" class="btn" id="pledge-cancel">Go back</button>
+      <button type="button" class="btn btn-primary" id="pledge-ok" disabled>Publish my book</button>
+    </div>
+  </dialog>
+
   <!-- Manage a book (edit details and chapters) -->
   <dialog id="manage-dialog" aria-labelledby="manage-title">
     <div class="dialog-head">
@@ -299,6 +314,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
   <script src="config.js?v=3"></script>
-  <script src="draw.js?v=5"></script>
+  <script src="draw.js?v=6"></script>
 </body>
 </html>

@@ -104,6 +104,8 @@
   var sb = null;
   var session = null;
   var uploaded = [];
+  var isAdmin = false;
+  var removedSamples = [];
 
   function rowToBook(r) {
     var url = r.file_path ? sb.storage.from('books').getPublicUrl(r.file_path).data.publicUrl : null;
@@ -190,10 +192,29 @@
   }
 
   function allBooks() {
-    return uploaded.concat(SAMPLES.slice(0, Math.max(0, 9 - uploaded.length)));
+    var samples = SAMPLES.filter(function (b) { return removedSamples.indexOf(b.id) === -1; });
+    return uploaded.concat(samples.slice(0, Math.max(0, 9 - uploaded.length)));
   }
 
   function isOwner(book) { return !!(session && book.owner === session.user.id); }
+
+  function loadRemovedSamples() {
+    if (!sb) return Promise.resolve();
+    return sb.from('removed_samples').select('sample_id').then(function (r) {
+      removedSamples = r.error ? [] : r.data.map(function (x) { return x.sample_id; });
+    });
+  }
+
+  function refreshAdmin() {
+    if (!sb || !session) {
+      if (isAdmin) { isAdmin = false; renderGrid(); }
+      return;
+    }
+    sb.rpc('is_admin').then(function (r) {
+      var v = !r.error && r.data === true;
+      if (v !== isAdmin) { isAdmin = v; renderGrid(); }
+    });
+  }
 
   function backendMessage() {
     return window.supabase
@@ -339,7 +360,7 @@
       sb.auth.getSession().then(function (r) { session = r.data.session; ui(); renderGrid(); });
     }
 
-    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; }
+    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; refreshAdmin(); }
   }
 
   /* ---------- Navigation ---------- */
@@ -431,6 +452,9 @@
       actions.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Manage', onclick: function () { openManage(book); } }));
       actions.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: function () { removeBook(book); } }));
     }
+    if (isAdmin && !isOwner(book)) {
+      actions.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Admin: remove', onclick: function () { removeBook(book); } }));
+    }
 
     return el('article', { class: 'card' }, [
       coverFor(book),
@@ -461,7 +485,21 @@
   }
 
   function removeBook(book) {
-    if (!window.confirm('Remove "' + book.title + '" from Explore? This cannot be undone.')) return;
+    var question = book.sample
+      ? 'Remove the sample book "' + book.title + '" for everyone?'
+      : 'Remove "' + book.title + '" from Explore? This cannot be undone.';
+    if (!window.confirm(question)) return;
+
+    if (book.sample) {
+      sb.from('removed_samples').insert({ sample_id: book.id }).then(function (r) {
+        if (r.error) { toast('Could not remove the sample: ' + r.error.message); return; }
+        removedSamples.push(book.id);
+        renderGrid();
+        toast('Sample removed.');
+      });
+      return;
+    }
+
     deleteBook(book).then(function () {
       uploaded = uploaded.filter(function (b) { return b.id !== book.id; });
       renderGrid();
@@ -809,6 +847,20 @@
     return m ? m[1].toLowerCase() : '';
   }
 
+function confirmPledge() {
+    return new Promise(function (resolve) {
+      var d = $('#pledge-dialog'), ok = $('#pledge-ok'), chk = $('#pledge-check');
+      if (typeof d.showModal !== 'function') { resolve(true); return; }
+      chk.checked = false;
+      ok.disabled = true;
+      chk.onchange = function () { ok.disabled = !chk.checked; };
+      ok.onclick = function () { d.close(); resolve(true); };
+      $('#pledge-cancel').onclick = function () { d.close(); resolve(false); };
+      d.oncancel = function () { resolve(false); };
+      d.showModal();
+    });
+  }
+
   function buildForm(onPublished) {
     var tpl = $('#book-form-template');
     var form = tpl.content.firstElementChild.cloneNode(true);
@@ -862,9 +914,11 @@
         }
       }
 
+      confirmPledge().then(function (accepted) {
+      if (!accepted) return null;
       submitBtn.disabled = true;
       submitBtn.textContent = 'Publishing...';
-      prep.then(function () {
+      return prep.then(function () {
         return coverFile ? resizeCover(coverFile).then(function (b) { coverBlob = b; }) : null;
       }).then(function () { return saveBook(meta, upload, coverBlob); }).then(function (book) {
         uploaded.unshift(book);
@@ -878,6 +932,7 @@
       }).then(function () {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Publish book';
+      });
       });
     });
 
@@ -916,8 +971,8 @@
       sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
     }
     initAuth();
-    getAllBooks().then(function (books) {
-      uploaded = books;
+    Promise.all([getAllBooks(), loadRemovedSamples()]).then(function (results) {
+      uploaded = results[0];
       renderGrid();
       var m = /#book=([\w-]+)/.exec(location.hash);
       if (m) {

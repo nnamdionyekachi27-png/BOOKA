@@ -496,3 +496,11 @@ dialog .book-form { border: 0; padding: 0; background: transparent; }
 .cover.has-image .cover-title, .cover.has-image .cover-author {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
+
+/* ===== Pledge popup ===== */
+#pledge-dialog { width: min(28rem, calc(100vw - 1.5rem)); }
+#pledge-dialog h2 { font-size: 1.6rem; margin-bottom: 0.8rem; }
+.pledge-note { margin: 0 0 0.9rem; font-size: 1.05rem; }
+.pledge-red { margin: 0 0 1.1rem; color: #b3261e; font-weight: 600; }
+.pledge-actions { display: flex; gap: 0.6rem; justify-content: flex-end; flex-wrap: wrap; margin-top: 0.4rem; }
+.pledge-actions .btn:disabled { opacity: 0.45; cursor: not-allowed; }
