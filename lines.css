@@ -504,3 +504,69 @@ dialog .book-form { border: 0; padding: 0; background: transparent; }
 .pledge-red { margin: 0 0 1.1rem; color: #b3261e; font-weight: 600; }
 .pledge-actions { display: flex; gap: 0.6rem; justify-content: flex-end; flex-wrap: wrap; margin-top: 0.4rem; }
 .pledge-actions .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ===== Roomier cards, hearts, tabs, reports ===== */
+.card { position: relative; }
+.card-body { gap: 0.6rem; padding: 1.1rem 1.2rem 1.25rem; }
+.card-main { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.5rem; }
+.card-main .btn-primary { flex: 1; padding: 0.7rem 1rem; }
+
+.heart-btn {
+  display: inline-flex; align-items: center; gap: 0.4rem; flex: none;
+  font: inherit; font-weight: 600; color: var(--ink-soft);
+  background: var(--card); border: 1.5px solid var(--rule); border-radius: 999px;
+  padding: 0.5rem 0.85rem; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.heart-btn:hover { border-color: #e53950; background: #fff5f6; }
+.heart-icon { font-size: 1.25rem; line-height: 1; display: inline-block; }
+.heart-btn.liked { border-color: #ff1744; background: #fff0f2; }
+.heart-btn.liked .heart-count { color: #d50032; }
+.heart-btn.liked .heart-icon {
+  filter: drop-shadow(0 0 5px #ff1744) drop-shadow(0 0 12px rgba(255, 23, 68, 0.85));
+  animation: heart-pop 0.4s ease;
+}
+@keyframes heart-pop { 0% { transform: scale(0.5); } 60% { transform: scale(1.4); } 100% { transform: scale(1); } }
+
+.float-heart {
+  position: absolute; bottom: 5rem; z-index: 6; pointer-events: none; opacity: 0; line-height: 1;
+  animation: heart-float 1.7s ease-out forwards;
+}
+@keyframes heart-float {
+  0%   { transform: translate(0, 0) scale(0.6); opacity: 0; }
+  15%  { opacity: 1; }
+  100% { transform: translate(var(--dx, 0), -240px) scale(1.2) rotate(14deg); opacity: 0; }
+}
+
+.more { margin-top: 0.1rem; }
+.more summary {
+  display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; list-style: none;
+  font-size: 0.9rem; color: var(--ink-soft); padding: 0.35rem 0;
+}
+.more summary::-webkit-details-marker { display: none; }
+.more summary::after { content: "\25BE"; transition: transform 0.15s; }
+.more[open] summary::after { transform: rotate(180deg); }
+.more-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; padding-top: 0.75rem; border-top: 1px dashed var(--rule); }
+
+.head-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+.chips { display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.4rem; margin-bottom: 1.25rem; }
+.chip {
+  font: inherit; font-size: 0.92rem; white-space: nowrap; cursor: pointer;
+  padding: 0.5rem 1rem; border-radius: 999px;
+  border: 1.5px solid var(--rule); background: var(--card); color: var(--ink);
+}
+.chip:hover { border-color: var(--accent); }
+.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.report-row { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.75rem; }
+.report-row p { margin: 0 0 0.35rem; }
+.report-title { font-family: var(--serif); font-size: 1.15rem; font-weight: 600; }
+.report-reason { color: var(--ink); }
+.report-date { font-size: 0.85rem; color: var(--ink-soft); }
+.report-row .card-actions { margin-top: 0.6rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .float-heart { display: none; }
+  .heart-btn.liked .heart-icon { animation: none; }
+}

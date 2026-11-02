@@ -106,6 +106,8 @@
   var uploaded = [];
   var isAdmin = false;
   var removedSamples = [];
+  var likedIds = [];
+  var sortMode = 'all';
 
   function rowToBook(r) {
     var url = r.file_path ? sb.storage.from('books').getPublicUrl(r.file_path).data.publicUrl : null;
@@ -114,7 +116,7 @@
       id: r.id, title: r.title, author: r.author, genre: r.genre, blurb: r.blurb, type: r.type,
       text: r.body, fileName: r.file_name, filePath: r.file_path, fileUrl: url,
       coverPath: r.cover_path, coverUrl: coverUrl,
-      reads: r.reads, owner: r.owner, created: new Date(r.created_at).getTime()
+      reads: r.reads, likes: r.likes || 0, owner: r.owner, created: new Date(r.created_at).getTime()
     };
   }
 
@@ -205,14 +207,36 @@
     });
   }
 
+  function updateReportCount(n) {
+    var b = $('#open-reports');
+    if (typeof n === 'number') { b.textContent = 'Reports (' + n + ')'; return; }
+    sb.from('reports').select('id', { count: 'exact', head: true }).then(function (r) {
+      if (!r.error) b.textContent = 'Reports (' + (r.count || 0) + ')';
+    });
+  }
+
   function refreshAdmin() {
     if (!sb || !session) {
+      $('#open-reports').hidden = true;
       if (isAdmin) { isAdmin = false; renderGrid(); }
       return;
     }
     sb.rpc('is_admin').then(function (r) {
       var v = !r.error && r.data === true;
+      $('#open-reports').hidden = !v;
+      if (v) updateReportCount();
       if (v !== isAdmin) { isAdmin = v; renderGrid(); }
+    });
+  }
+
+  function refreshLikes() {
+    if (!sb || !session) {
+      if (likedIds.length) { likedIds = []; renderGrid(); }
+      return;
+    }
+    sb.from('likes').select('book_id').then(function (r) {
+      likedIds = r.error ? [] : r.data.map(function (x) { return x.book_id; });
+      renderGrid();
     });
   }
 
@@ -360,7 +384,7 @@
       sb.auth.getSession().then(function (r) { session = r.data.session; ui(); renderGrid(); });
     }
 
-    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; refreshAdmin(); }
+    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; refreshAdmin(); refreshLikes(); }
   }
 
   /* ---------- Navigation ---------- */
@@ -435,37 +459,104 @@
     });
   }
 
+  function floatHearts(card) {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var faces = ['\u2764\uFE0F', '\uD83D\uDC96', '\uD83D\uDC97', '\uD83D\uDC95'];
+    for (var i = 0; i < 9; i++) {
+      (function (n) {
+        var h = el('span', { class: 'float-heart', 'aria-hidden': 'true', text: faces[n % faces.length] });
+        h.style.left = (8 + Math.random() * 78) + '%';
+        h.style.fontSize = (1 + Math.random() * 0.9) + 'rem';
+        h.style.animationDelay = (n * 0.08) + 's';
+        h.style.setProperty('--dx', (Math.round(Math.random() * 70) - 35) + 'px');
+        card.appendChild(h);
+        setTimeout(function () { if (h.parentNode) h.parentNode.removeChild(h); }, 2000);
+      })(i);
+    }
+  }
+
+  function toggleLike(book, card, paint) {
+    if (!sb) { toast(backendMessage()); return; }
+    if (!session) { toast('Log in to like books.'); openAuth(); return; }
+    var was = likedIds.indexOf(book.id) !== -1;
+    function apply(liked) {
+      if (liked) { if (likedIds.indexOf(book.id) === -1) likedIds.push(book.id); book.likes = (book.likes || 0) + 1; }
+      else { likedIds = likedIds.filter(function (x) { return x !== book.id; }); book.likes = Math.max(0, (book.likes || 0) - 1); }
+      paint();
+    }
+    apply(!was);
+    if (!was) floatHearts(card);
+    var op = was
+      ? sb.from('likes').delete().eq('book_id', book.id).eq('user_id', session.user.id)
+      : sb.from('likes').insert({ book_id: book.id });
+    op.then(function (r) {
+      if (r.error && r.error.code !== '23505') { apply(was); toast('Could not save your like. Try again.'); }
+    });
+  }
+
+  function heartButton(book, card) {
+    var btn = el('button', { type: 'button', class: 'heart-btn' });
+    var icon = el('span', { class: 'heart-icon', 'aria-hidden': 'true' });
+    var count = el('span', { class: 'heart-count' });
+    btn.appendChild(icon);
+    btn.appendChild(count);
+    function paint() {
+      var liked = likedIds.indexOf(book.id) !== -1;
+      btn.classList.toggle('liked', liked);
+      btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
+      btn.setAttribute('aria-label', (liked ? 'Unlike ' : 'Like ') + book.title + '. ' + (book.likes || 0) + ' likes');
+      icon.textContent = liked ? '\u2764\uFE0F' : '\uD83E\uDD0D';
+      count.textContent = String(book.likes || 0);
+    }
+    btn.addEventListener('click', function () { toggleLike(book, card, paint); });
+    paint();
+    return btn;
+  }
+
   function cardFor(book) {
     var real = !book.sample;
     var tags = [el('span', { class: 'tag', text: book.genre })];
     tags.push(el('span', { class: real ? 'tag new' : 'tag', text: real ? (book.reads || 0) + ' reads' : 'Sample' }));
-
     if (book.type === 'chapters') tags.push(el('span', { class: 'tag', text: 'Serial' }));
 
-    var actions = [el('button', { type: 'button', class: 'btn btn-primary btn-small', text: 'Read', onclick: function () { openReader(book); } })];
-    if (real && book.fileUrl) actions.push(el('a', { class: 'btn btn-small', text: 'Download', href: book.fileUrl, target: '_blank', rel: 'noopener' }));
+    var card = el('article', { class: 'card' });
+
+    var main = el('div', { class: 'card-main' }, [
+      el('button', { type: 'button', class: 'btn btn-primary', text: 'Read', onclick: function () { openReader(book); } })
+    ]);
+    if (real) main.appendChild(heartButton(book, card));
+
+    var more = [];
     if (real) {
-      actions.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Share', onclick: function () { shareBook(book); } }));
-      actions.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Report', onclick: function () { reportBook(book); } }));
+      more.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Share', onclick: function () { shareBook(book); } }));
+      if (book.fileUrl) more.push(el('a', { class: 'btn btn-small', text: 'Download', href: book.fileUrl, target: '_blank', rel: 'noopener' }));
+      more.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Report', onclick: function () { reportBook(book); } }));
     }
     if (isOwner(book)) {
-      actions.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Manage', onclick: function () { openManage(book); } }));
-      actions.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: function () { removeBook(book); } }));
+      more.push(el('button', { type: 'button', class: 'btn btn-small', text: 'Manage', onclick: function () { openManage(book); } }));
+      more.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Remove', onclick: function () { removeBook(book); } }));
     }
     if (isAdmin && !isOwner(book)) {
-      actions.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Admin: remove', onclick: function () { removeBook(book); } }));
+      more.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Admin: remove', onclick: function () { removeBook(book); } }));
     }
 
-    return el('article', { class: 'card' }, [
-      coverFor(book),
-      el('div', { class: 'card-body' }, [
-        el('div', { class: 'tags' }, tags),
-        el('h3', { text: book.title }),
-        el('p', { class: 'by', text: 'by ' + book.author }),
-        el('p', { class: 'blurb', text: book.blurb || 'No description yet.' }),
-        el('div', { class: 'card-actions' }, actions)
-      ])
+    var body = el('div', { class: 'card-body' }, [
+      el('div', { class: 'tags' }, tags),
+      el('h3', { text: book.title }),
+      el('p', { class: 'by', text: 'by ' + book.author }),
+      el('p', { class: 'blurb', text: book.blurb || 'No description yet.' }),
+      main
     ]);
+    if (more.length) {
+      body.appendChild(el('details', { class: 'more' }, [
+        el('summary', { text: 'More options' }),
+        el('div', { class: 'more-actions' }, more)
+      ]));
+    }
+
+    card.appendChild(coverFor(book));
+    card.appendChild(body);
+    return card;
   }
 
   function renderGrid() {
@@ -479,12 +570,26 @@
       return (!q || hay.indexOf(q) !== -1) && (!g || b.genre === g);
     });
 
+    if (sortMode === 'new') {
+      var cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      books = books.filter(function (b) { return !b.sample && b.created >= cutoff; });
+    } else if (sortMode === 'reads') {
+      books = books.filter(function (b) { return !b.sample && (b.reads || 0) > 0; })
+        .sort(function (a, b) { return (b.reads || 0) - (a.reads || 0); });
+    } else if (sortMode === 'likes') {
+      books = books.filter(function (b) { return !b.sample && (b.likes || 0) > 0; })
+        .sort(function (a, b) { return (b.likes || 0) - (a.likes || 0); });
+    }
+    $('#empty').textContent = sortMode === 'all'
+      ? 'No books match that search. Try a different word or choose All genres.'
+      : 'Nothing here yet. As books are read and loved, they will show up on this shelf.';
+
     books.forEach(function (b) { grid.appendChild(cardFor(b)); });
     $('#empty').hidden = books.length > 0;
     $('#book-count').textContent = books.length + (books.length === 1 ? ' book' : ' books') + ' on the shelf.';
   }
 
-  function removeBook(book) {
+  function removeBook(book, after) {
     var question = book.sample
       ? 'Remove the sample book "' + book.title + '" for everyone?'
       : 'Remove "' + book.title + '" from Explore? This cannot be undone.';
@@ -504,6 +609,7 @@
       uploaded = uploaded.filter(function (b) { return b.id !== book.id; });
       renderGrid();
       toast('Book removed.');
+      if (after) after();
     }).catch(function () { toast('Could not remove the book. Try again.'); });
   }
 
@@ -841,6 +947,38 @@
     if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
   }
 
+/* ---------- Admin: reports panel ---------- */
+  function loadReports() {
+    var box = $('#reports-body');
+    box.innerHTML = '';
+    box.appendChild(el('p', { class: 'sub', text: 'Loading reports...' }));
+    sb.from('reports').select('id,reason,created_at,book_id,books(id,title,author)')
+      .order('created_at', { ascending: false }).then(function (r) {
+        box.innerHTML = '';
+        if (r.error) { box.appendChild(el('p', { class: 'sub', text: 'Could not load reports: ' + r.error.message })); return; }
+        updateReportCount(r.data.length);
+        if (!r.data.length) { box.appendChild(el('p', { class: 'sub', text: 'No reports. Everything looks quiet.' })); return; }
+        r.data.forEach(function (rep) {
+          var info = rep.books;
+          var book = uploaded.filter(function (x) { return x.id === rep.book_id; })[0];
+          var actions = [];
+          if (book) {
+            actions.push(actionBtn('Open', function () { $('#reports-dialog').close(); openReader(book); }));
+            actions.push(actionBtn('Remove book', function () { removeBook(book, loadReports); }, false, true));
+          }
+          actions.push(actionBtn('Dismiss report', function () {
+            sb.from('reports').delete().eq('id', rep.id).then(loadReports);
+          }));
+          box.appendChild(el('div', { class: 'report-row' }, [
+            el('p', { class: 'report-title', text: info ? info.title + ' by ' + info.author : 'Book already removed' }),
+            el('p', { class: 'report-reason', text: '\u201C' + rep.reason + '\u201D' }),
+            el('p', { class: 'report-date', text: new Date(rep.created_at).toLocaleString() }),
+            el('div', { class: 'card-actions' }, actions)
+          ]));
+        });
+      });
+  }
+
   /* ---------- Upload form (used on Write page and in Explore dialog) ---------- */
   function extensionOf(name) {
     var m = /\.([a-z0-9]+)$/i.exec(name || '');
@@ -940,6 +1078,18 @@ function confirmPledge() {
   }
 
   function initForms() {
+    var reportsDlg = $('#reports-dialog');
+    $('#open-reports').addEventListener('click', function () { if (typeof reportsDlg.showModal === 'function') { reportsDlg.showModal(); loadReports(); } });
+    $('#close-reports').addEventListener('click', function () { reportsDlg.close(); });
+    reportsDlg.addEventListener('click', function (e) { if (e.target === reportsDlg) reportsDlg.close(); });
+    $all('.chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        sortMode = chip.getAttribute('data-sort');
+        $all('.chip').forEach(function (c) { c.classList.toggle('active', c === chip); });
+        renderGrid();
+      });
+    });
+
     var manageDlg = $('#manage-dialog');
     $('#close-manage').addEventListener('click', function () { manageDlg.close(); });
     manageDlg.addEventListener('click', function (e) { if (e.target === manageDlg) manageDlg.close(); });

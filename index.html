@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="lines.css?v=6">
+  <link rel="stylesheet" href="lines.css?v=7">
 </head>
 <body>
 
@@ -148,7 +148,10 @@
           <h1 id="explore-title">Explore the shelf</h1>
           <p class="sub">Pick a book and read it right here. <span id="book-count"></span></p>
         </div>
-        <button type="button" class="btn btn-primary" id="open-upload">Upload a book</button>
+        <div class="head-actions">
+          <button type="button" class="btn" id="open-reports" hidden>Reports</button>
+          <button type="button" class="btn btn-primary" id="open-upload">Upload a book</button>
+        </div>
       </div>
 
       <div class="filters">
@@ -160,6 +163,13 @@
           <span class="field-label">Genre</span>
           <select id="genre-filter"></select>
         </label>
+      </div>
+
+      <div class="chips" role="group" aria-label="Browse books">
+        <button type="button" class="chip active" data-sort="all">All books</button>
+        <button type="button" class="chip" data-sort="new">New this week</button>
+        <button type="button" class="chip" data-sort="reads">Most read</button>
+        <button type="button" class="chip" data-sort="likes">Most loved</button>
       </div>
 
       <div class="grid" id="book-grid" aria-live="polite"></div>
@@ -225,6 +235,15 @@
       <button type="submit" class="btn btn-primary" id="auth-submit">Log in</button>
       <p class="auth-row center" id="back-row" hidden><button type="button" class="link-btn" id="back-btn">Back to log in</button></p>
     </form>
+  </dialog>
+
+  <!-- Admin: reported books -->
+  <dialog id="reports-dialog" aria-labelledby="reports-title">
+    <div class="dialog-head">
+      <h2 id="reports-title">Reported books</h2>
+      <button type="button" class="icon-btn" id="close-reports" aria-label="Close">&times;</button>
+    </div>
+    <div id="reports-body"></div>
   </dialog>
 
   <!-- Pledge shown before publishing -->
@@ -314,6 +333,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
   <script src="config.js?v=3"></script>
-  <script src="draw.js?v=6"></script>
+  <script src="draw.js?v=7"></script>
 </body>
 </html>
