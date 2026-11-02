@@ -570,3 +570,38 @@ dialog .book-form { border: 0; padding: 0; background: transparent; }
   .float-heart { display: none; }
   .heart-btn.liked .heart-icon { animation: none; }
 }
+
+/* ===== Card layout: Read, then reactions ===== */
+.card-main { display: block; margin-top: 0.4rem; }
+.card-main .btn-primary { width: 100%; }
+.card-reactions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.comment-btn:hover { border-color: var(--accent); background: var(--paper-deep); }
+
+/* ===== Comments ===== */
+#comments-dialog { width: min(34rem, calc(100vw - 1.5rem)); }
+.comments-list { display: flex; flex-direction: column; gap: 0.7rem; max-height: 50vh; overflow-y: auto; margin-bottom: 1rem; padding-right: 0.2rem; }
+.comment { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 0.7rem 0.9rem; }
+.comment-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.comment-head .time { font-size: 0.82rem; color: var(--ink-soft); margin-left: auto; }
+.badge { font-size: 0.72rem; font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 999px; background: var(--accent); color: #fff; }
+.comment-body { margin: 0.35rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-actions { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
+.comment-gate { margin: 0 0 0.5rem; color: var(--ink-soft); }
+.comment-form .btn { width: 100%; }
+
+/* ===== Reading themes ===== */
+.theme-switch { display: inline-flex; border: 1.5px solid var(--rule); border-radius: 999px; overflow: hidden; }
+.theme-switch button { font: inherit; font-size: 0.85rem; padding: 0.45rem 0.8rem; border: 0; background: var(--card); color: var(--ink); cursor: pointer; }
+.theme-switch button.active { background: var(--accent); color: #fff; }
+
+.reader.theme-sepia {
+  --paper: #f4ecd8; --paper-deep: #eadfc2; --card: #faf3e0; --ink: #433422; --ink-soft: #7a6a52;
+  --rule: #dccfb0; --accent: #7a4e1d; --accent-dark: #5e3b14;
+}
+.reader.theme-dark {
+  --paper: #14181b; --paper-deep: #262d32; --card: #1d2327; --ink: #e8e4da; --ink-soft: #a7adb1;
+  --rule: #333b41; --accent: #86c8da; --accent-dark: #6fb3c6;
+}
+.reader.theme-dark .btn-primary, .reader.theme-dark .theme-switch button.active { color: #0f242c; }
+.reader.theme-dark .btn-primary:hover { background: var(--accent-dark); }
+.reader.theme-dark .reading-page a { color: var(--accent); }

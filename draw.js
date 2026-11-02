@@ -108,6 +108,7 @@
   var removedSamples = [];
   var likedIds = [];
   var sortMode = 'all';
+  var commentBook = null;
 
   function rowToBook(r) {
     var url = r.file_path ? sb.storage.from('books').getPublicUrl(r.file_path).data.publicUrl : null;
@@ -116,7 +117,7 @@
       id: r.id, title: r.title, author: r.author, genre: r.genre, blurb: r.blurb, type: r.type,
       text: r.body, fileName: r.file_name, filePath: r.file_path, fileUrl: url,
       coverPath: r.cover_path, coverUrl: coverUrl,
-      reads: r.reads, likes: r.likes || 0, owner: r.owner, created: new Date(r.created_at).getTime()
+      reads: r.reads, likes: r.likes || 0, comments: r.comments_count || 0, owner: r.owner, created: new Date(r.created_at).getTime()
     };
   }
 
@@ -384,7 +385,7 @@
       sb.auth.getSession().then(function (r) { session = r.data.session; ui(); renderGrid(); });
     }
 
-    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; refreshAdmin(); refreshLikes(); }
+    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; refreshAdmin(); refreshLikes(); refreshCommentsDialog(); }
   }
 
   /* ---------- Navigation ---------- */
@@ -447,8 +448,16 @@
 
   function shareBook(book) {
     var url = location.href.split('#')[0] + '#book=' + book.id;
-    if (navigator.clipboard) navigator.clipboard.writeText(url).then(function () { toast('Link copied.'); }, function () { toast(url); });
-    else toast(url);
+    var text = 'Read \u201C' + book.title + '\u201D by ' + book.author + ' on Treeshelf';
+    if (navigator.share) {
+      navigator.share({ title: book.title, text: text, url: url }).catch(function () { /* cancelled */ });
+      return;
+    }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text + '\n' + url).then(function () { toast('Link copied. Paste it in WhatsApp or anywhere.'); }, function () { toast(url); });
+    } else {
+      toast(url);
+    }
   }
 
   function reportBook(book) {
@@ -522,9 +531,8 @@
     var card = el('article', { class: 'card' });
 
     var main = el('div', { class: 'card-main' }, [
-      el('button', { type: 'button', class: 'btn btn-primary', text: 'Read', onclick: function () { openReader(book); } })
+      el('button', { type: 'button', class: 'btn btn-primary', text: readLabel(book), onclick: function () { openReader(book); } })
     ]);
-    if (real) main.appendChild(heartButton(book, card));
 
     var more = [];
     if (real) {
@@ -547,6 +555,9 @@
       el('p', { class: 'blurb', text: book.blurb || 'No description yet.' }),
       main
     ]);
+    if (real) {
+      body.appendChild(el('div', { class: 'card-reactions' }, [heartButton(book, card), commentButton(book)]));
+    }
     if (more.length) {
       body.appendChild(el('details', { class: 'more' }, [
         el('summary', { text: 'More options' }),
@@ -576,13 +587,18 @@
     } else if (sortMode === 'reads') {
       books = books.filter(function (b) { return !b.sample && (b.reads || 0) > 0; })
         .sort(function (a, b) { return (b.reads || 0) - (a.reads || 0); });
+    } else if (sortMode === 'recent') {
+      var rc = recents();
+      books = books.filter(function (b) { return !b.sample && rc[b.id]; })
+        .sort(function (a, b) { return rc[b.id] - rc[a.id]; });
     } else if (sortMode === 'likes') {
       books = books.filter(function (b) { return !b.sample && (b.likes || 0) > 0; })
         .sort(function (a, b) { return (b.likes || 0) - (a.likes || 0); });
     }
-    $('#empty').textContent = sortMode === 'all'
-      ? 'No books match that search. Try a different word or choose All genres.'
-      : 'Nothing here yet. As books are read and loved, they will show up on this shelf.';
+    $('#empty').textContent = {
+      all: 'No books match that search. Try a different word or choose All genres.',
+      recent: 'You have not started reading anything yet. Open a book and it will wait for you here.'
+    }[sortMode] || 'Nothing here yet. As books are read and loved, they will show up on this shelf.';
 
     books.forEach(function (b) { grid.appendChild(cardFor(b)); });
     $('#empty').hidden = books.length > 0;
@@ -642,6 +658,8 @@
 
   function openReader(book) {
     lastFocus = document.activeElement;
+    markRecent(book);
+    applyTheme(savedTheme());
     var body = $('#reader-body');
     var dl = $('#reader-download');
     body.innerHTML = '';
@@ -701,12 +719,17 @@
     reader.hidden = true;
     $('#reader-body').innerHTML = '';
     document.body.style.overflow = '';
+    renderGrid();
     if (readerUrl) { URL.revokeObjectURL(readerUrl); readerUrl = null; }
     if (lastFocus && lastFocus.focus) lastFocus.focus();
   }
 
   function initReader() {
     $('#reader-close').addEventListener('click', closeReader);
+    $all('.theme-switch button').forEach(function (b) {
+      b.addEventListener('click', function () { applyTheme(b.getAttribute('data-theme')); });
+    });
+    applyTheme(savedTheme());
     $('#font-up').addEventListener('click', function () {
       readerFontSize = Math.min(2, readerFontSize + 0.1); setReadingSize();
     });
@@ -947,12 +970,167 @@
     if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
   }
 
-/* ---------- Admin: reports panel ---------- */
+/* ---------- Reading themes and "continue reading" ---------- */
+  var THEMES = ['light', 'sepia', 'dark'];
+
+  function savedTheme() {
+    try { return localStorage.getItem('ts-theme') || 'light'; } catch (e) { return 'light'; }
+  }
+
+  function applyTheme(name) {
+    if (THEMES.indexOf(name) === -1) name = 'light';
+    var reader = $('#reader');
+    THEMES.forEach(function (t) { reader.classList.toggle('theme-' + t, t === name); });
+    $all('.theme-switch button').forEach(function (b) {
+      var on = b.getAttribute('data-theme') === name;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    try { localStorage.setItem('ts-theme', name); } catch (e) { /* storage unavailable */ }
+  }
+
+  function recents() {
+    try { return JSON.parse(localStorage.getItem('ts-recent') || '{}') || {}; } catch (e) { return {}; }
+  }
+
+  function markRecent(book) {
+    if (book.sample) return;
+    var r = recents();
+    r[book.id] = Date.now();
+    var keep = Object.keys(r).sort(function (a, b) { return r[b] - r[a]; }).slice(0, 30);
+    var out = {};
+    keep.forEach(function (id) { out[id] = r[id]; });
+    try { localStorage.setItem('ts-recent', JSON.stringify(out)); } catch (e) { /* storage unavailable */ }
+  }
+
+  function readLabel(book) {
+    if (book.type === 'chapters') {
+      var n = 0;
+      try { n = parseInt(localStorage.getItem('ts-chapter-' + book.id), 10) || 0; } catch (e) { n = 0; }
+      if (n > 0) return 'Continue reading (chapter ' + (n + 1) + ')';
+      if (recents()[book.id]) return 'Continue reading';
+    }
+    return 'Read';
+  }
+
+  /* ---------- Comments ---------- */
+  function timeAgo(dateString) {
+    var secs = Math.max(1, Math.round((Date.now() - new Date(dateString).getTime()) / 1000));
+    if (secs < 60) return 'just now';
+    var mins = Math.round(secs / 60);
+    if (mins < 60) return mins + (mins === 1 ? ' minute ago' : ' minutes ago');
+    var hours = Math.round(mins / 60);
+    if (hours < 24) return hours + (hours === 1 ? ' hour ago' : ' hours ago');
+    var days = Math.round(hours / 24);
+    if (days < 30) return days + (days === 1 ? ' day ago' : ' days ago');
+    return new Date(dateString).toLocaleDateString();
+  }
+
+  function commentButton(book) {
+    var btn = el('button', {
+      type: 'button', class: 'heart-btn comment-btn',
+      'aria-label': 'Comments on ' + book.title + '. ' + (book.comments || 0) + ' comments'
+    }, [
+      el('span', { class: 'heart-icon', 'aria-hidden': 'true', text: '\uD83D\uDCAC' }),
+      el('span', { class: 'heart-count', text: String(book.comments || 0) })
+    ]);
+    btn.addEventListener('click', function () { openComments(book); });
+    return btn;
+  }
+
+  function syncCommentForm() {
+    $('#comment-form').hidden = !session;
+    $('#comment-gate').hidden = !!session;
+  }
+
+  function refreshCommentsDialog() {
+    if (commentBook && $('#comments-dialog').open) { syncCommentForm(); loadComments(); }
+  }
+
+  function loadComments() {
+    var book = commentBook, list = $('#comments-list');
+    if (!book || !sb) return;
+    sb.from('comments').select('id,user_id,name,body,created_at').eq('book_id', book.id)
+      .order('created_at', { ascending: true }).then(function (r) {
+        list.innerHTML = '';
+        if (r.error) { list.appendChild(el('p', { class: 'sub', text: 'Could not load comments.' })); return; }
+        book.comments = r.data.length;
+        renderGrid();
+        if (!r.data.length) {
+          list.appendChild(el('p', { class: 'sub', text: 'No comments yet. Be the first to say something kind.' }));
+          return;
+        }
+        r.data.forEach(function (c) {
+          var mine = !!(session && c.user_id === session.user.id);
+          var head = [el('strong', { text: c.name })];
+          if (c.user_id === book.owner) head.push(el('span', { class: 'badge', text: 'Author' }));
+          head.push(el('span', { class: 'time', text: timeAgo(c.created_at) }));
+          var acts = [];
+          if (session && !mine) acts.push(actionBtn('Report', function () { reportComment(book, c); }));
+          if (mine || isOwner(book) || isAdmin) acts.push(actionBtn('Delete', function () { removeComment(c); }, false, true));
+          list.appendChild(el('div', { class: 'comment' }, [
+            el('div', { class: 'comment-head' }, head),
+            el('p', { class: 'comment-body', text: c.body }),
+            acts.length ? el('div', { class: 'comment-actions' }, acts) : null
+          ]));
+        });
+      });
+  }
+
+  function openComments(book) {
+    commentBook = book;
+    var dlg = $('#comments-dialog'), form = $('#comment-form');
+    $('#comments-title').textContent = 'Comments on ' + book.title;
+    $('#comment-msg').hidden = true;
+    form.elements.body.value = '';
+    try { form.elements.name.value = localStorage.getItem('ts-name') || ''; } catch (e) { /* storage unavailable */ }
+    syncCommentForm();
+    $('#comments-list').innerHTML = '';
+    if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+    loadComments();
+  }
+
+  function postComment() {
+    var form = $('#comment-form'), msg = $('#comment-msg'), btn = $('#comment-submit');
+    msg.hidden = true;
+    if (!sb || !session || !commentBook) return;
+    var name = form.elements.name.value.trim(), body = form.elements.body.value.trim();
+    if (!name) { msg.textContent = 'Add the name you want to appear with your comment.'; msg.hidden = false; return; }
+    if (!body) { msg.textContent = 'Write a comment first.'; msg.hidden = false; return; }
+    try { localStorage.setItem('ts-name', name); } catch (e) { /* storage unavailable */ }
+    btn.disabled = true;
+    sb.from('comments').insert({ book_id: commentBook.id, name: name, body: body }).then(function (r) {
+      btn.disabled = false;
+      if (r.error) { msg.textContent = 'Could not post your comment. ' + r.error.message; msg.hidden = false; return; }
+      form.elements.body.value = '';
+      toast('Comment posted.');
+      loadComments();
+    });
+  }
+
+  function removeComment(c) {
+    if (!window.confirm('Delete this comment?')) return;
+    sb.from('comments').delete().eq('id', c.id).then(function (r) {
+      if (r.error) { toast('Could not delete the comment.'); return; }
+      toast('Comment deleted.');
+      loadComments();
+    });
+  }
+
+  function reportComment(book, c) {
+    var reason = window.prompt('Why are you reporting this comment?');
+    if (!reason || !reason.trim()) return;
+    sb.from('reports').insert({ book_id: book.id, comment_id: c.id, reason: reason.trim().slice(0, 300) }).then(function (r) {
+      toast(r.error ? 'Could not send the report.' : 'Thank you. We will review this comment.');
+    });
+  }
+
+  /* ---------- Admin: reports panel ---------- */
   function loadReports() {
     var box = $('#reports-body');
     box.innerHTML = '';
     box.appendChild(el('p', { class: 'sub', text: 'Loading reports...' }));
-    sb.from('reports').select('id,reason,created_at,book_id,books(id,title,author)')
+    sb.from('reports').select('id,reason,created_at,book_id,comment_id,books(id,title,author),comments(id,body,name)')
       .order('created_at', { ascending: false }).then(function (r) {
         box.innerHTML = '';
         if (r.error) { box.appendChild(el('p', { class: 'sub', text: 'Could not load reports: ' + r.error.message })); return; }
@@ -962,6 +1140,11 @@
           var info = rep.books;
           var book = uploaded.filter(function (x) { return x.id === rep.book_id; })[0];
           var actions = [];
+          if (rep.comments) {
+            actions.push(actionBtn('Delete comment', function () {
+              sb.from('comments').delete().eq('id', rep.comments.id).then(loadReports);
+            }, false, true));
+          }
           if (book) {
             actions.push(actionBtn('Open', function () { $('#reports-dialog').close(); openReader(book); }));
             actions.push(actionBtn('Remove book', function () { removeBook(book, loadReports); }, false, true));
@@ -971,7 +1154,8 @@
           }));
           box.appendChild(el('div', { class: 'report-row' }, [
             el('p', { class: 'report-title', text: info ? info.title + ' by ' + info.author : 'Book already removed' }),
-            el('p', { class: 'report-reason', text: '\u201C' + rep.reason + '\u201D' }),
+            rep.comments ? el('p', { class: 'report-reason', text: 'Comment by ' + rep.comments.name + ': \u201C' + rep.comments.body + '\u201D' }) : null,
+            el('p', { class: 'report-reason', text: 'Reason: ' + rep.reason }),
             el('p', { class: 'report-date', text: new Date(rep.created_at).toLocaleString() }),
             el('div', { class: 'card-actions' }, actions)
           ]));
@@ -1078,6 +1262,12 @@ function confirmPledge() {
   }
 
   function initForms() {
+    var commentsDlg = $('#comments-dialog');
+    $('#close-comments').addEventListener('click', function () { commentsDlg.close(); });
+    commentsDlg.addEventListener('click', function (e) { if (e.target === commentsDlg) commentsDlg.close(); });
+    $('#comment-login').addEventListener('click', function () { openAuth(); });
+    $('#comment-form').addEventListener('submit', function (e) { e.preventDefault(); postComment(); });
+
     var reportsDlg = $('#reports-dialog');
     $('#open-reports').addEventListener('click', function () { if (typeof reportsDlg.showModal === 'function') { reportsDlg.showModal(); loadReports(); } });
     $('#close-reports').addEventListener('click', function () { reportsDlg.close(); });

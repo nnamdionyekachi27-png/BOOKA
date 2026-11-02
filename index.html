@@ -5,10 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Treeshelf | A hub for amateur writers and the people who read them</title>
   <meta name="description" content="Read and share amateur books, stories and poems. Upload a PDF or Word file and let readers find it.">
+  <meta name="theme-color" content="#1f4e5f">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Treeshelf">
+  <meta property="og:title" content="Treeshelf | Cozy reads from amateur writers">
+  <meta property="og:description" content="Read and share books, stories and poems written by amateur writers. No sign-up needed to read.">
+  <meta property="og:image" content="https://YOUR-SITE-ADDRESS/read.jpeg">
+  <meta property="og:url" content="https://YOUR-SITE-ADDRESS/">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="lines.css?v=7">
+  <link rel="stylesheet" href="lines.css?v=8">
 </head>
 <body>
 
@@ -167,6 +175,7 @@
 
       <div class="chips" role="group" aria-label="Browse books">
         <button type="button" class="chip active" data-sort="all">All books</button>
+        <button type="button" class="chip" data-sort="recent">Continue reading</button>
         <button type="button" class="chip" data-sort="new">New this week</button>
         <button type="button" class="chip" data-sort="reads">Most read</button>
         <button type="button" class="chip" data-sort="likes">Most loved</button>
@@ -237,6 +246,24 @@
     </form>
   </dialog>
 
+  <!-- Comments -->
+  <dialog id="comments-dialog" aria-labelledby="comments-title">
+    <div class="dialog-head">
+      <h2 id="comments-title">Comments</h2>
+      <button type="button" class="icon-btn" id="close-comments" aria-label="Close">&times;</button>
+    </div>
+    <div class="comments-list" id="comments-list"></div>
+    <p class="comment-gate" id="comment-gate" hidden>Log in to join the conversation. <button type="button" class="link-btn" id="comment-login">Log in</button></p>
+    <form class="comment-form" id="comment-form" novalidate hidden>
+      <label class="field"><span class="field-label">Your name</span>
+        <input type="text" name="name" maxlength="40" placeholder="How your name appears"></label>
+      <label class="field"><span class="field-label">Your comment</span>
+        <textarea name="body" rows="3" maxlength="500" placeholder="Say something kind and helpful"></textarea></label>
+      <p class="form-error" id="comment-msg" role="alert" hidden></p>
+      <button type="submit" class="btn btn-primary" id="comment-submit">Post comment</button>
+    </form>
+  </dialog>
+
   <!-- Admin: reported books -->
   <dialog id="reports-dialog" aria-labelledby="reports-title">
     <div class="dialog-head">
@@ -278,6 +305,11 @@
         <p id="reader-author"></p>
       </div>
       <div class="reader-tools">
+        <div class="theme-switch" role="group" aria-label="Reading theme">
+          <button type="button" class="active" data-theme="light" aria-pressed="true">Light</button>
+          <button type="button" data-theme="sepia" aria-pressed="false">Sepia</button>
+          <button type="button" data-theme="dark" aria-pressed="false">Dark</button>
+        </div>
         <button type="button" class="btn btn-small" id="font-down" aria-label="Smaller text">A&minus;</button>
         <button type="button" class="btn btn-small" id="font-up" aria-label="Larger text">A+</button>
         <a class="btn btn-small" id="reader-download" hidden>Download</a>
@@ -333,6 +365,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
   <script src="config.js?v=3"></script>
-  <script src="draw.js?v=7"></script>
+  <script src="draw.js?v=8"></script>
 </body>
 </html>
