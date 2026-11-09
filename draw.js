@@ -108,6 +108,12 @@
   var removedSamples = [];
   var likedIds = [];
   var sortMode = 'all';
+  var commentBook = null;
+  var PAGE_SIZE = 12;
+  var visibleCount = PAGE_SIZE;
+  var renderQueued = false;
+  var lastSessionKey = null;
+  var coverObserver = null;
 
   function rowToBook(r) {
     var url = r.file_path ? sb.storage.from('books').getPublicUrl(r.file_path).data.publicUrl : null;
@@ -116,14 +122,30 @@
       id: r.id, title: r.title, author: r.author, genre: r.genre, blurb: r.blurb, type: r.type,
       text: r.body, fileName: r.file_name, filePath: r.file_path, fileUrl: url,
       coverPath: r.cover_path, coverUrl: coverUrl,
-      reads: r.reads, likes: r.likes || 0, owner: r.owner, created: new Date(r.created_at).getTime()
+      reads: r.reads, likes: r.likes || 0, comments: r.comments_count || 0, owner: r.owner, created: new Date(r.created_at).getTime()
     };
   }
 
+  var BOOK_COLUMNS = 'id,title,author,genre,blurb,type,file_path,file_name,cover_path,reads,likes,comments_count,created_at';
+
+  function readBookCache() {
+    try { return JSON.parse(localStorage.getItem('ts-books-v3') || 'null'); } catch (e) { return null; }
+  }
+
   function getAllBooks() {
-    if (!sb) return Promise.resolve([]);
-    return sb.from('books').select('*').order('created_at', { ascending: false }).then(function (res) {
-      return res.error ? [] : res.data.map(rowToBook);
+    if (!sb) return Promise.resolve(null);
+    return sb.from('books').select(BOOK_COLUMNS).order('created_at', { ascending: false }).then(function (res) {
+      if (res.error) return null;
+      try { localStorage.setItem('ts-books-v3', JSON.stringify(res.data)); } catch (e) { /* storage unavailable */ }
+      return res.data.map(rowToBook);
+    });
+  }
+
+  /* Story text is only downloaded when someone opens the book. */
+  function ensureBody(book) {
+    if (book.sample || book.type !== 'text' || typeof book.text === 'string') return Promise.resolve();
+    return sb.from('books').select('body').eq('id', book.id).single().then(function (r) {
+      if (!r.error) book.text = r.data.body || '';
     });
   }
 
@@ -178,7 +200,7 @@
       return sb.from('books').insert({
         title: meta.title, author: meta.author, genre: meta.genre, blurb: meta.blurb,
         type: meta.type, body: meta.body, file_path: path, file_name: meta.fileName, cover_path: coverPath
-      }).select().single();
+      }).select(BOOK_COLUMNS + ',body').single();
     }).then(function (r) {
       if (r.error) throw r.error;
       return rowToBook(r.data);
@@ -198,7 +220,17 @@
     return uploaded.concat(samples.slice(0, Math.max(0, 9 - uploaded.length)));
   }
 
-  function isOwner(book) { return !!(session && book.owner === session.user.id); }
+  var mineIds = {};
+  function isOwner(book) { return !!(session && mineIds[book.id]); }
+
+  function refreshMyBooks() {
+    mineIds = {};
+    if (!sb || !session) { renderGrid(); return; }
+    sb.rpc('my_book_ids').then(function (r) {
+      if (!r.error && Array.isArray(r.data)) r.data.forEach(function (id) { mineIds[id] = true; });
+      renderGrid();
+    });
+  }
 
   function loadRemovedSamples() {
     if (!sb) return Promise.resolve();
@@ -384,14 +416,19 @@
       sb.auth.getSession().then(function (r) { session = r.data.session; ui(); renderGrid(); });
     }
 
-    function ui() { btn.textContent = session ? 'Log out' : 'Log in'; refreshAdmin(); refreshLikes(); }
+    function ui() {
+      btn.textContent = session ? 'Log out' : 'Log in';
+      var key = session ? session.user.id : 'none';
+      if (key !== lastSessionKey) { lastSessionKey = key; refreshAdmin(); refreshLikes(); loadNames(); refreshBanState(); refreshMyBooks(); }
+      refreshCommentsDialog();
+    }
   }
 
   /* ---------- Navigation ---------- */
   var VIEWS = ['about', 'explore', 'write'];
 
   function showView(name, updateHash) {
-    if (name.indexOf('book=') === 0) name = 'explore';
+    if (name.indexOf('book=') === 0 || name.indexOf('writer=') === 0) name = 'explore';
     if (VIEWS.indexOf(name) === -1) name = 'about';
     VIEWS.forEach(function (v) { $('#' + v).hidden = (v !== name); });
     $all('.main-nav button').forEach(function (b) {
@@ -426,6 +463,22 @@
     GENRES.forEach(function (g) { filter.appendChild(el('option', { value: g, text: g })); });
   }
 
+function lazyCover(btn, url) {
+    var css = 'url("' + url.replace(/"/g, '%22') + '")';
+    if (!('IntersectionObserver' in window)) { btn.style.backgroundImage = css; return; }
+    if (!coverObserver) {
+      coverObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (!e.isIntersecting) return;
+          e.target.style.backgroundImage = e.target.getAttribute('data-bg');
+          coverObserver.unobserve(e.target);
+        });
+      }, { rootMargin: '300px' });
+    }
+    btn.setAttribute('data-bg', css);
+    coverObserver.observe(btn);
+  }
+
   function coverFor(book) {
     var colour = COVER_COLOURS[hashString(book.title + book.author) % COVER_COLOURS.length];
     var btn = el('button', {
@@ -440,15 +493,24 @@
     ]);
     if (book.coverUrl) {
       btn.classList.add('has-image');
-      btn.style.backgroundImage = 'url("' + book.coverUrl.replace(/"/g, '%22') + '")';
+      lazyCover(btn, book.coverUrl);
     }
     return btn;
   }
 
   function shareBook(book) {
-    var url = location.href.split('#')[0] + '#book=' + book.id;
-    if (navigator.clipboard) navigator.clipboard.writeText(url).then(function () { toast('Link copied.'); }, function () { toast(url); });
-    else toast(url);
+    var local = location.protocol === 'file:' || /^(localhost|127\.|192\.168\.|10\.)/.test(location.hostname);
+    var url = local ? location.href.split('#')[0] + '#book=' + book.id : location.origin + '/share/' + book.id;
+    var text = 'Read \u201C' + book.title + '\u201D by ' + book.author + ' on Treeshelf';
+    if (navigator.share) {
+      navigator.share({ title: book.title, text: text, url: url }).catch(function () { /* cancelled */ });
+      return;
+    }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text + '\n' + url).then(function () { toast('Link copied. Paste it in WhatsApp or anywhere.'); }, function () { toast(url); });
+    } else {
+      toast(url);
+    }
   }
 
   function reportBook(book) {
@@ -478,6 +540,7 @@
   function toggleLike(book, card, paint) {
     if (!sb) { toast(backendMessage()); return; }
     if (!session) { toast('Log in to like books.'); openAuth(); return; }
+    if (iAmBanned) { toast('Your account has been restricted by an admin.'); return; }
     var was = likedIds.indexOf(book.id) !== -1;
     function apply(liked) {
       if (liked) { if (likedIds.indexOf(book.id) === -1) likedIds.push(book.id); book.likes = (book.likes || 0) + 1; }
@@ -513,6 +576,12 @@
     return btn;
   }
 
+function authorLine(book) {
+    if (book.sample) return el('p', { class: 'by', text: 'by ' + book.author });
+    var link = el('button', { type: 'button', class: 'author-link', text: book.author, onclick: function () { openProfile(book.author); } });
+    return el('p', { class: 'by' }, [document.createTextNode('by '), link]);
+  }
+
   function cardFor(book) {
     var real = !book.sample;
     var tags = [el('span', { class: 'tag', text: book.genre })];
@@ -522,9 +591,8 @@
     var card = el('article', { class: 'card' });
 
     var main = el('div', { class: 'card-main' }, [
-      el('button', { type: 'button', class: 'btn btn-primary', text: 'Read', onclick: function () { openReader(book); } })
+      el('button', { type: 'button', class: 'btn btn-primary', text: readLabel(book), onclick: function () { openReader(book); } })
     ]);
-    if (real) main.appendChild(heartButton(book, card));
 
     var more = [];
     if (real) {
@@ -538,15 +606,22 @@
     }
     if (isAdmin && !isOwner(book)) {
       more.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Admin: remove', onclick: function () { removeBook(book); } }));
+      if (real) more.push(el('button', { type: 'button', class: 'btn btn-small btn-danger', text: 'Admin: ban writer', onclick: function () { banFromBook(book); } }));
     }
 
     var body = el('div', { class: 'card-body' }, [
       el('div', { class: 'tags' }, tags),
       el('h3', { text: book.title }),
-      el('p', { class: 'by', text: 'by ' + book.author }),
+      authorLine(book),
       el('p', { class: 'blurb', text: book.blurb || 'No description yet.' }),
       main
     ]);
+    if (real) {
+      var reactions = [heartButton(book, card), commentButton(book)];
+      var pr = profileMap[book.author];
+      if (pr && pr.supportUrl) reactions.push(tipPill(book.author, pr.supportUrl));
+      body.appendChild(el('div', { class: 'card-reactions' }, reactions));
+    }
     if (more.length) {
       body.appendChild(el('details', { class: 'more' }, [
         el('summary', { text: 'More options' }),
@@ -560,6 +635,12 @@
   }
 
   function renderGrid() {
+    if (renderQueued) return;
+    renderQueued = true;
+    (window.requestAnimationFrame || window.setTimeout)(function () { renderQueued = false; doRenderGrid(); });
+  }
+
+  function doRenderGrid() {
     var q = $('#search').value.trim().toLowerCase();
     var g = $('#genre-filter').value;
     var grid = $('#book-grid');
@@ -576,16 +657,22 @@
     } else if (sortMode === 'reads') {
       books = books.filter(function (b) { return !b.sample && (b.reads || 0) > 0; })
         .sort(function (a, b) { return (b.reads || 0) - (a.reads || 0); });
+    } else if (sortMode === 'recent') {
+      var rc = recents();
+      books = books.filter(function (b) { return !b.sample && rc[b.id]; })
+        .sort(function (a, b) { return rc[b.id] - rc[a.id]; });
     } else if (sortMode === 'likes') {
       books = books.filter(function (b) { return !b.sample && (b.likes || 0) > 0; })
         .sort(function (a, b) { return (b.likes || 0) - (a.likes || 0); });
     }
-    $('#empty').textContent = sortMode === 'all'
-      ? 'No books match that search. Try a different word or choose All genres.'
-      : 'Nothing here yet. As books are read and loved, they will show up on this shelf.';
+    $('#empty').textContent = {
+      all: 'No books match that search. Try a different word or choose All genres.',
+      recent: 'You have not started reading anything yet. Open a book and it will wait for you here.'
+    }[sortMode] || 'Nothing here yet. As books are read and loved, they will show up on this shelf.';
 
-    books.forEach(function (b) { grid.appendChild(cardFor(b)); });
+    books.slice(0, visibleCount).forEach(function (b) { grid.appendChild(cardFor(b)); });
     $('#empty').hidden = books.length > 0;
+    $('#more-wrap').hidden = books.length <= visibleCount;
     $('#book-count').textContent = books.length + (books.length === 1 ? ' book' : ' books') + ' on the shelf.';
   }
 
@@ -642,6 +729,8 @@
 
   function openReader(book) {
     lastFocus = document.activeElement;
+    markRecent(book);
+    applyTheme(savedTheme());
     var body = $('#reader-body');
     var dl = $('#reader-download');
     body.innerHTML = '';
@@ -669,19 +758,30 @@
     } else if (book.type === 'doc') {
       body.appendChild(note('This older .doc file cannot be shown inside the reader. Use Download to open it in Word.'));
     } else {
-      body.appendChild(textToPage(book.text || ''));
-      setReadingSize();
+      body.appendChild(note('Opening...'));
+      ensureBody(book).then(function () {
+        if ($('#reader').hidden) return;
+        body.innerHTML = '';
+        body.appendChild(textToPage(book.text || ''));
+        setReadingSize();
+      });
     }
     $('#reader-close').focus();
   }
 
+  function ensureMammoth() {
+    if (typeof mammoth !== 'undefined') return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var tag = document.createElement('script');
+      tag.src = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
+      tag.onload = resolve;
+      tag.onerror = function () { reject(new Error('Word reader failed to load')); };
+      document.head.appendChild(tag);
+    });
+  }
+
   function renderDocx(book, body) {
-    if (typeof mammoth === 'undefined') {
-      body.innerHTML = '';
-      body.appendChild(note('The Word reader could not load. Check your internet connection, or use Download.'));
-      return;
-    }
-    fetch(book.fileUrl).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+    ensureMammoth().then(function () { return fetch(book.fileUrl); }).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
       return mammoth.convertToHtml({ arrayBuffer: buf });
     }).then(function (result) {
       body.innerHTML = '';
@@ -701,12 +801,17 @@
     reader.hidden = true;
     $('#reader-body').innerHTML = '';
     document.body.style.overflow = '';
+    renderGrid();
     if (readerUrl) { URL.revokeObjectURL(readerUrl); readerUrl = null; }
     if (lastFocus && lastFocus.focus) lastFocus.focus();
   }
 
   function initReader() {
     $('#reader-close').addEventListener('click', closeReader);
+    $all('.theme-switch button').forEach(function (b) {
+      b.addEventListener('click', function () { applyTheme(b.getAttribute('data-theme')); });
+    });
+    applyTheme(savedTheme());
     $('#font-up').addEventListener('click', function () {
       readerFontSize = Math.min(2, readerFontSize + 0.1); setReadingSize();
     });
@@ -876,20 +981,27 @@
   }
 
   function openManage(book) {
+    if (book.type === 'text' && typeof book.text !== 'string') {
+      ensureBody(book).then(function () {
+        if (typeof book.text === 'string') openManage(book); else toast('Could not load your story. Try again.');
+      });
+      return;
+    }
     var dlg = $('#manage-dialog'), box = $('#manage-body');
     $('#manage-title').textContent = 'Manage: ' + book.title;
     box.innerHTML = '';
 
     var f = el('form', { class: 'book-form', novalidate: '' });
     var title = el('input', { type: 'text', maxlength: '80' }); title.value = book.title;
-    var author = el('input', { type: 'text', maxlength: '60' }); author.value = book.author;
+    var author = el('select');
+    fillAuthorSelect(author, book.author);
     var genre = el('select');
     GENRES.forEach(function (g) { genre.appendChild(el('option', { value: g, text: g })); });
     genre.value = book.genre;
     var blurb = el('textarea', { rows: '3', maxlength: '240' }); blurb.value = book.blurb || '';
 
     var coverIn = el('input', { type: 'file', accept: 'image/*' });
-    var parts = [field('Book title', title), field('Author or pen name', author), field('Genre', genre), field('Short description', blurb), field(book.coverPath ? 'Change cover image' : 'Cover image (optional)', coverIn)];
+    var parts = [field('Book title', title), field('Published under', author), field('Genre', genre), field('Short description', blurb), field(book.coverPath ? 'Change cover image' : 'Cover image (optional)', coverIn)];
     var removeCover = null;
     if (book.coverPath) {
       removeCover = el('input', { type: 'checkbox' });
@@ -923,7 +1035,7 @@
       }
       save.disabled = true;
       pre.then(function () {
-        return sb.from('books').update(changes).eq('id', book.id).select().single();
+        return sb.from('books').update(changes).eq('id', book.id).select(BOOK_COLUMNS + ',body').single();
       }).then(function (r) {
         save.disabled = false;
         if (r.error) { msg.textContent = r.error.message; msg.hidden = false; return; }
@@ -947,12 +1059,672 @@
     if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
   }
 
-/* ---------- Admin: reports panel ---------- */
+/* ---------- Reading themes and "continue reading" ---------- */
+  var THEMES = ['light', 'sepia', 'dark'];
+
+  function savedTheme() {
+    try { return localStorage.getItem('ts-theme') || 'light'; } catch (e) { return 'light'; }
+  }
+
+  function applyTheme(name) {
+    if (THEMES.indexOf(name) === -1) name = 'light';
+    var reader = $('#reader');
+    THEMES.forEach(function (t) { reader.classList.toggle('theme-' + t, t === name); });
+    $all('.theme-switch button').forEach(function (b) {
+      var on = b.getAttribute('data-theme') === name;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    try { localStorage.setItem('ts-theme', name); } catch (e) { /* storage unavailable */ }
+  }
+
+  function recents() {
+    try { return JSON.parse(localStorage.getItem('ts-recent') || '{}') || {}; } catch (e) { return {}; }
+  }
+
+  function markRecent(book) {
+    if (book.sample) return;
+    var r = recents();
+    r[book.id] = Date.now();
+    var keep = Object.keys(r).sort(function (a, b) { return r[b] - r[a]; }).slice(0, 30);
+    var out = {};
+    keep.forEach(function (id) { out[id] = r[id]; });
+    try { localStorage.setItem('ts-recent', JSON.stringify(out)); } catch (e) { /* storage unavailable */ }
+  }
+
+  function readLabel(book) {
+    if (book.type === 'chapters') {
+      var n = 0;
+      try { n = parseInt(localStorage.getItem('ts-chapter-' + book.id), 10) || 0; } catch (e) { n = 0; }
+      if (n > 0) return 'Continue reading (chapter ' + (n + 1) + ')';
+      if (recents()[book.id]) return 'Continue reading';
+    }
+    return 'Read';
+  }
+
+  /* ---------- Your names: one username, up to two pen names ---------- */
+  var myNames = { username: null, pens: [] };
+  var namesLoaded = false, namesLoading = false;
+  var nameWidgets = [];
+  var nameKind = 'username';
+  var NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{1,22}[A-Za-z0-9]$/;
+
+  function nameList() {
+    return myNames.pens.slice();   // pen names only: the username is for comments
+  }
+
+  function fillAuthorSelect(select, current) {
+    var names = nameList();
+    if (current && names.indexOf(current) === -1) names.push(current);
+    select.innerHTML = '';
+    if (!names.length) { select.appendChild(el('option', { value: '', text: session ? 'No pen name yet. Add one below.' : 'Log in to choose a name' })); return; }
+    names.forEach(function (n) { select.appendChild(el('option', { value: n, text: n })); });
+    select.value = (current && names.indexOf(current) !== -1) ? current : names[0];
+  }
+
+  function refreshNameWidgets() {
+    nameWidgets.forEach(function (w) {
+      var prev = w.select.value;
+      fillAuthorSelect(w.select, null);
+      if (prev && nameList().indexOf(prev) !== -1) w.select.value = prev;
+      var full = myNames.pens.length >= 2;
+      w.field.hidden = full;
+      var lab = w.field.querySelector('.field-label'), inp = w.field.querySelector('input');
+      if (lab) lab.textContent = myNames.pens.length === 0 ? 'Choose a pen name to publish under' : 'Or add another pen name (optional)';
+      if (inp) inp.placeholder = myNames.pens.length === 0 ? 'For example: Ada Stone' : 'Leave empty to use the name chosen above';
+      w.hint.textContent = full
+        ? 'You have used both of your pen names. Choose which one to publish under from the list above.'
+        : 'You can have up to two pen names, and they cannot be changed later. Your username is only used for comments.';
+    });
+    renderMyProfiles();
+  }
+
+  function registerNameWidget(select, field, hint) {
+    nameWidgets.push({ select: select, field: field, hint: hint });
+    refreshNameWidgets();
+  }
+
+  function claimName(name, kind) {
+    return sb.from('names').insert({ name: name, kind: kind }).then(function (r) {
+      if (r.error) throw new Error(friendlyNameError(r.error));
+      if (kind === 'username') myNames.username = name; else myNames.pens.push(name);
+      refreshNameWidgets();
+      syncCommentForm();
+    });
+  }
+
+  function loadNames() {
+    if (!sb || !session) {
+      myNames = { username: null, pens: [] };
+      namesLoaded = false;
+      refreshNameWidgets();
+      return;
+    }
+    if (namesLoading) return;
+    namesLoading = true;
+    sb.from('names').select('name,kind').order('created_at', { ascending: true }).then(function (r) {
+      namesLoading = false;
+      myNames = { username: null, pens: [] };
+      if (r.error) { namesLoaded = true; toast('Could not load your names. Run the latest database update.'); return; }
+      r.data.forEach(function (x) { if (x.kind === 'username') myNames.username = x.name; else myNames.pens.push(x.name); });
+      namesLoaded = true;
+      refreshNameWidgets();
+      syncCommentForm();
+      if (!myNames.username) openNameDialog('username');
+    });
+  }
+
+  function requireUsername() {
+    if (!session) { openAuth(); return false; }
+    if (iAmBanned) { toast('Your account has been restricted by an admin.'); return false; }
+    if (!namesLoaded) { toast('Loading your account. Try again in a moment.'); return false; }
+    if (!myNames.username) { openNameDialog('username'); return false; }
+    return true;
+  }
+
+  function openNameDialog(kind) {
+    nameKind = kind;
+    var dlg = $('#name-dialog'), isUser = (kind === 'username');
+    $('#name-title').textContent = isUser ? 'Choose your username' : 'Add a pen name';
+    $('#name-intro').textContent = isUser
+      ? 'Your username appears on your comments. You only get one and it is permanent, so choose carefully. Use 3 to 24 letters or numbers. When you publish a book, you will use a pen name instead.'
+      : 'A pen name lets you publish books under another name, for example one for each kind of story you write. You can have up to two pen names (you have used ' + myNames.pens.length + ' of 2) and a pen name cannot be changed later. Use 3 to 24 letters or numbers.';
+    $('#name-label').textContent = isUser ? 'Username' : 'Pen name';
+    $('#name-submit').textContent = isUser ? 'Save username' : 'Save pen name';
+    $('#name-msg').hidden = true;
+    $('#name-form').elements.name.value = '';
+    if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+  }
+
+  function friendlyNameError(err) {
+    if (err.code === '23505') return 'That name is already taken. Try another.';
+    if (err.code === '23514') return 'That name is not allowed. Reserved words such as admin cannot be used.';
+    if (err.code === '42501') return 'Choose a username first.';
+    return err.message;
+  }
+
+  function saveName() {
+    var form = $('#name-form'), msg = $('#name-msg'), btn = $('#name-submit');
+    var name = form.elements.name.value.trim().replace(/\s+/g, ' ');
+    function say(t) { msg.textContent = t; msg.hidden = false; }
+    if (!NAME_RE.test(name)) { say('Use 3 to 24 letters or numbers. Spaces, dots, dashes and underscores are fine in the middle.'); return; }
+    btn.disabled = true;
+    sb.from('names').insert({ name: name, kind: nameKind }).then(function (r) {
+      btn.disabled = false;
+      if (r.error) { say(friendlyNameError(r.error)); return; }
+      if (nameKind === 'username') myNames.username = name; else myNames.pens.push(name);
+      namesLoaded = true;
+      $('#name-dialog').close();
+      refreshNameWidgets();
+      syncCommentForm();
+      toast((nameKind === 'username' ? 'Username saved: ' : 'Pen name saved: ') + name);
+    });
+  }
+
+  /* ---------- Comments ---------- */
+  var commentCache = {};
+  var commentInflight = {};
+
+  function timeAgo(dateString) {
+    var secs = Math.max(1, Math.round((Date.now() - new Date(dateString).getTime()) / 1000));
+    if (secs < 60) return 'just now';
+    var mins = Math.round(secs / 60);
+    if (mins < 60) return mins + (mins === 1 ? ' minute ago' : ' minutes ago');
+    var hours = Math.round(mins / 60);
+    if (hours < 24) return hours + (hours === 1 ? ' hour ago' : ' hours ago');
+    var days = Math.round(hours / 24);
+    if (days < 30) return days + (days === 1 ? ' day ago' : ' days ago');
+    return new Date(dateString).toLocaleDateString();
+  }
+
+  function updateCommentCounts(book) {
+    $all('[data-ccount="' + book.id + '"]').forEach(function (n) { n.textContent = String(book.comments || 0); });
+  }
+
+  function fetchComments(book) {
+    var p = sb.from('comments').select('id,user_id,name,body,created_at,hidden,by_author').eq('book_id', book.id)
+      .order('created_at', { ascending: true }).limit(200).then(function (r) {
+        delete commentInflight[book.id];
+        if (r.error) return null;
+        commentCache[book.id] = { rows: r.data, at: Date.now() };
+        book.comments = r.data.filter(function (x) { return !x.hidden; }).length;
+        updateCommentCounts(book);
+        return r.data;
+      });
+    commentInflight[book.id] = p;
+    return p;
+  }
+
+  function prefetchComments(book) {
+    if (!sb || commentInflight[book.id]) return;
+    var c = commentCache[book.id];
+    if (c && Date.now() - c.at < 20000) return;
+    fetchComments(book);
+  }
+
+  function commentButton(book) {
+    var btn = el('button', {
+      type: 'button', class: 'heart-btn comment-btn',
+      'aria-label': 'Comments on ' + book.title + '. ' + (book.comments || 0) + ' comments'
+    }, [
+      el('span', { class: 'heart-icon', 'aria-hidden': 'true', text: '\uD83D\uDCAC' }),
+      el('span', { class: 'heart-count', 'data-ccount': book.id, text: String(book.comments || 0) })
+    ]);
+    btn.addEventListener('click', function () { openComments(book); });
+    ['pointerenter', 'focus', 'touchstart'].forEach(function (evt) {
+      btn.addEventListener(evt, function () { prefetchComments(book); }, { passive: true });
+    });
+    return btn;
+  }
+
+  function syncCommentForm() {
+    $('#comment-form').hidden = !session;
+    $('#comment-gate').hidden = !!session;
+    $('#commenting-as').textContent = myNames.username ? 'Commenting as ' + myNames.username : 'Choose a username to comment.';
+  }
+
+  function renderComments(book, rows) {
+    var list = $('#comments-list');
+    list.innerHTML = '';
+    if (!rows.length) {
+      list.appendChild(el('p', { class: 'sub', text: 'No comments yet. Be the first to say something kind.' }));
+      return;
+    }
+    rows.forEach(function (c) {
+      var mine = !!(session && c.user_id === session.user.id);
+      var head = [el('strong', { text: c.name })];
+      if (c.by_author) head.push(el('span', { class: 'badge', text: 'Author' }));
+      if (c.hidden) head.push(el('span', { class: 'badge muted', text: 'Hidden' }));
+      head.push(el('span', { class: 'time', text: c.pending ? 'sending...' : timeAgo(c.created_at) }));
+      var acts = [];
+      if (!c.pending) {
+        if (c.hidden && isAdmin) acts.push(actionBtn('Restore', function () { restoreComment(book, c); }));
+        if (isAdmin && !mine) acts.push(actionBtn('Ban user', function () { banFromComment(book, c); }, false, true));
+        if (session && !mine && !c.hidden) acts.push(actionBtn('Report', function () { reportComment(book, c); }));
+        if (mine || isOwner(book) || isAdmin) acts.push(actionBtn('Delete', function () { removeComment(book, c); }, false, true));
+      }
+      list.appendChild(el('div', { class: 'comment' }, [
+        el('div', { class: 'comment-head' }, head),
+        el('p', { class: 'comment-body', text: c.body }),
+        acts.length ? el('div', { class: 'comment-actions' }, acts) : null
+      ]));
+    });
+  }
+
+  function refreshCommentsDialog() {
+    if (!commentBook || !$('#comments-dialog').open) return;
+    syncCommentForm();
+    var cached = commentCache[commentBook.id];
+    if (cached) renderComments(commentBook, cached.rows);
+  }
+
+  function openComments(book) {
+    commentBook = book;
+    var dlg = $('#comments-dialog'), form = $('#comment-form');
+    $('#comments-title').textContent = 'Comments on ' + book.title;
+    $('#comment-msg').hidden = true;
+    form.elements.body.value = '';
+    syncCommentForm();
+    var cached = commentCache[book.id];
+    if (cached) {
+      renderComments(book, cached.rows);
+    } else {
+      $('#comments-list').innerHTML = '';
+      $('#comments-list').appendChild(el('p', { class: 'sub', text: 'Loading comments...' }));
+    }
+    if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+    var pending = commentInflight[book.id] || fetchComments(book);
+    pending.then(function (rows) {
+      if (commentBook !== book) return;
+      if (rows) renderComments(book, rows);
+      else if (!cached) {
+        $('#comments-list').innerHTML = '';
+        $('#comments-list').appendChild(el('p', { class: 'sub', text: 'Could not load comments. Check your connection.' }));
+      }
+    });
+  }
+
+  function postComment() {
+    var form = $('#comment-form'), msg = $('#comment-msg');
+    msg.hidden = true;
+    if (!sb || !session || !commentBook) return;
+    if (!requireUsername()) return;
+    var body = form.elements.body.value.trim();
+    if (!body) { msg.textContent = 'Write a comment first.'; msg.hidden = false; return; }
+    var book = commentBook, name = myNames.username;
+    var cache = commentCache[book.id] || (commentCache[book.id] = { rows: [], at: Date.now() });
+    var temp = { id: 'tmp-' + Date.now(), user_id: session.user.id, name: name, body: body, created_at: new Date().toISOString(), pending: true, by_author: isOwner(book) };
+    cache.rows.push(temp);
+    book.comments = (book.comments || 0) + 1;
+    updateCommentCounts(book);
+    form.elements.body.value = '';
+    renderComments(book, cache.rows);
+
+    sb.from('comments').insert({ book_id: book.id, name: name, body: body })
+      .select('id,user_id,name,body,created_at,by_author').single().then(function (r) {
+        if (r.error) {
+          cache.rows = cache.rows.filter(function (t) { return t !== temp; });
+          book.comments = Math.max(0, (book.comments || 1) - 1);
+          updateCommentCounts(book);
+          form.elements.body.value = body;
+          msg.textContent = 'Could not post your comment. ' + r.error.message;
+          msg.hidden = false;
+        } else {
+          var i = cache.rows.indexOf(temp);
+          if (i > -1) cache.rows[i] = r.data;
+          toast('Comment posted.');
+        }
+        if (commentBook === book) renderComments(book, cache.rows);
+      });
+  }
+
+  function removeComment(book, c) {
+    if (!window.confirm('Delete this comment?')) return;
+    var cache = commentCache[book.id];
+    var idx = cache ? cache.rows.indexOf(c) : -1;
+    if (idx > -1) {
+      cache.rows.splice(idx, 1);
+      book.comments = Math.max(0, (book.comments || 1) - 1);
+      updateCommentCounts(book);
+      renderComments(book, cache.rows);
+    }
+    sb.from('comments').delete().eq('id', c.id).then(function (r) {
+      if (r.error) {
+        toast('Could not delete the comment.');
+        fetchComments(book).then(function (rows) { if (rows && commentBook === book) renderComments(book, rows); });
+        return;
+      }
+      toast('Comment deleted.');
+    });
+  }
+
+function restoreComment(book, c, after) {
+    sb.from('comments').update({ hidden: false }).eq('id', c.id).then(function (r) {
+      if (r.error) { toast('Could not restore the comment.'); return; }
+      sb.from('reports').delete().eq('comment_id', c.id).then(function () { /* reports cleared */ });
+      toast('Comment restored.');
+      if (after) { after(); return; }
+      fetchComments(book).then(function (rows) { if (rows && commentBook === book) renderComments(book, rows); });
+    });
+  }
+
+  function reportComment(book, c) {
+    var reason = window.prompt('Why are you reporting this comment?');
+    if (!reason || !reason.trim()) return;
+    sb.from('reports').insert({ book_id: book.id, comment_id: c.id, reason: reason.trim().slice(0, 300) }).then(function (r) {
+      if (r.error) { toast(r.error.code === '23505' ? 'You already reported this comment.' : 'Could not send the report.'); return; }
+      toast('Thank you. We will review this comment.');
+    });
+  }
+
+  /* ---------- Writer profiles (optional, one per name) ---------- */
+  var profileMap = {};
+  var editingName = null;
+
+  function rowToProfile(r) {
+    return {
+      name: r.name, bio: r.bio || '', avatarPath: r.avatar_path, supportUrl: r.support_url || null,
+      avatarUrl: r.avatar_path ? sb.storage.from('books').getPublicUrl(r.avatar_path).data.publicUrl : null
+    };
+  }
+
+  function loadProfiles() {
+    if (!sb) { renderMyProfiles(); return Promise.resolve(); }
+    return sb.from('profiles').select('name,bio,avatar_path,support_url').then(function (r) {
+      if (!r.error) {
+        profileMap = {};
+        r.data.forEach(function (x) { profileMap[x.name] = rowToProfile(x); });
+      }
+      renderMyProfiles();
+    });
+  }
+
+  function avatarEl(name, url, big) {
+    var a = el('span', { class: 'avatar' + (big ? ' big' : ''), 'aria-hidden': 'true' });
+    if (url) a.style.backgroundImage = 'url("' + url.replace(/"/g, '%22') + '")';
+    else a.textContent = name.charAt(0).toUpperCase();
+    return a;
+  }
+
+  function isMyName(name) { return !!session && nameList().indexOf(name) !== -1; }
+
+  function resizeAvatar(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      var url = URL.createObjectURL(file);
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var side = Math.min(img.width, img.height);
+        var canvas = document.createElement('canvas');
+        canvas.width = 320; canvas.height = 320;
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 320, 320);
+        ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 320, 320);
+        canvas.toBlob(function (blob) {
+          if (blob) resolve(blob); else reject(new Error('Could not process the photo.'));
+        }, 'image/jpeg', 0.85);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('That image could not be read. Try a JPG or PNG.')); };
+      img.src = url;
+    });
+  }
+
+  function renderMyProfiles() {
+    var box = $('#my-profiles');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!session) { box.appendChild(el('p', { class: 'sub', text: 'Log in to set up your writer profile.' })); return; }
+    var names = nameList();
+    if (!names.length) {
+      box.appendChild(el('p', { class: 'sub', text: namesLoaded ? 'Profiles belong to pen names. Add your first pen name when you publish a book, then create its profile here.' : 'Loading your names...' }));
+      return;
+    }
+    names.forEach(function (n) {
+      var p = profileMap[n];
+      var actions = [actionBtn(p ? 'Edit profile' : 'Create profile', function () { openProfileEdit(n); })];
+      if (p) actions.push(actionBtn('View', function () { openProfile(n); }));
+      box.appendChild(el('div', { class: 'my-profile' }, [
+        avatarEl(n, p && p.avatarUrl, false),
+        el('div', { class: 'info' }, [
+          el('div', { class: 'who' }, [el('span', { text: n }), el('span', { class: 'tag', text: 'Pen name' })]),
+          el('p', { class: 'snippet', text: p && p.bio ? p.bio : 'No profile yet. This is optional.' }),
+          el('div', { class: 'card-actions' }, actions)
+        ])
+      ]));
+    });
+  }
+
+  function openProfileEdit(name) {
+    editingName = name;
+    var p = profileMap[name], form = $('#profile-form');
+    $('#profile-edit-title').textContent = 'Profile for ' + name;
+    form.elements.bio.value = p ? p.bio : '';
+    form.elements.support.value = p && p.supportUrl ? p.supportUrl : '';
+    form.elements.photo.value = '';
+    $('#remove-photo-row').hidden = !(p && p.avatarPath);
+    $('#remove-photo').checked = false;
+    $('#profile-msg').hidden = true;
+    var dlg = $('#profile-edit-dialog');
+    if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+  }
+
+  function saveProfile() {
+    var form = $('#profile-form'), msg = $('#profile-msg'), btn = $('#profile-save');
+    var name = editingName, p = profileMap[name], bio = form.elements.bio.value.trim();
+    function say(t) { msg.textContent = t; msg.hidden = false; }
+    if (!sb || !session || !name) return;
+    if (bio.length > 500) { say('Keep your bio under 500 characters.'); return; }
+    var support = cleanSupportUrl(form.elements.support.value);
+    if (support === null) { say('Use a link from Paystack, Flutterwave, Selar, Buy Me a Coffee, Ko-fi, PayPal.me, Patreon or GoFundMe, starting with https://'); return; }
+    var file = form.elements.photo.files[0];
+    if (file && file.type.indexOf('image/') !== 0) { say('The photo must be an image (JPG or PNG).'); return; }
+    var oldPath = p ? p.avatarPath : null, newPath = oldPath;
+    var step = Promise.resolve();
+    if (file) {
+      step = resizeAvatar(file).then(function (blob) {
+        var path = session.user.id + '/avatars/' + Date.now() + '.jpg';
+        return sb.storage.from('books').upload(path, blob, { contentType: 'image/jpeg' }).then(function (r) {
+          if (r.error) throw r.error;
+          newPath = path;
+        });
+      });
+    } else if ($('#remove-photo').checked) {
+      newPath = null;
+    }
+    btn.disabled = true;
+    step.then(function () {
+      return sb.from('profiles').upsert(
+        { name: name, bio: bio, avatar_path: newPath, support_url: support || null, updated_at: new Date().toISOString() },
+        { onConflict: 'name' }
+      ).select('name,bio,avatar_path,support_url').single();
+    }).then(function (r) {
+      btn.disabled = false;
+      if (r.error) { say('Could not save your profile. ' + r.error.message); return; }
+      profileMap[name] = rowToProfile(r.data);
+      if (oldPath && oldPath !== newPath) sb.storage.from('books').remove([oldPath]);
+      $('#profile-edit-dialog').close();
+      renderMyProfiles();
+      toast('Profile saved.');
+    }).catch(function (err) {
+      btn.disabled = false;
+      say((err && err.message) || 'Could not save your profile.');
+    });
+  }
+
+  function openProfile(name) {
+    var dlg = $('#profile-dialog'), box = $('#profile-body');
+    var p = profileMap[name];
+    var books = uploaded.filter(function (b) { return b.author === name; });
+    var reads = 0, likes = 0;
+    books.forEach(function (b) { reads += (b.reads || 0); likes += (b.likes || 0); });
+    box.innerHTML = '';
+
+    box.appendChild(el('div', { class: 'profile-head' }, [
+      avatarEl(name, p && p.avatarUrl, true),
+      el('div', null, [
+        el('h2', { text: name }),
+        el('p', { class: 'sub', text: books.length + (books.length === 1 ? ' book' : ' books') + ' \u00B7 ' + reads + ' reads \u00B7 ' + likes + ' likes' })
+      ])
+    ]));
+    box.appendChild(el('p', { class: 'profile-bio', text: p && p.bio ? p.bio : 'This writer has not added a bio yet.' }));
+    if (p && p.supportUrl) box.appendChild(tipCard(name, p.supportUrl));
+
+    var actions = [actionBtn('Share profile', function () {
+      var url = location.href.split('#')[0] + '#writer=' + encodeURIComponent(name);
+      var text = 'Read books by ' + name + ' on Treeshelf';
+      if (navigator.share) { navigator.share({ title: name, text: text, url: url }).catch(function () { /* cancelled */ }); return; }
+      if (navigator.clipboard) navigator.clipboard.writeText(text + '\n' + url).then(function () { toast('Link copied.'); }, function () { toast(url); });
+      else toast(url);
+    })];
+    if (isMyName(name)) actions.push(actionBtn(p ? 'Edit profile' : 'Create profile', function () { dlg.close(); openProfileEdit(name); }));
+    if (isAdmin && p) {
+      actions.push(actionBtn('Admin: clear profile', function () {
+        if (!window.confirm('Clear the profile of ' + name + '?')) return;
+        sb.from('profiles').delete().eq('name', name).then(function (r) {
+          if (r.error) { toast('Could not clear the profile.'); return; }
+          if (p.avatarPath) sb.storage.from('books').remove([p.avatarPath]);
+          delete profileMap[name];
+          dlg.close();
+          renderMyProfiles();
+          toast('Profile cleared.');
+        });
+      }, false, true));
+    }
+    box.appendChild(el('div', { class: 'profile-actions' }, actions));
+
+    var list = el('div', { class: 'profile-books' }, [el('h3', { text: 'Books' })]);
+    if (!books.length) list.appendChild(el('p', { class: 'sub', text: 'No books published under this name yet.' }));
+    books.forEach(function (b) {
+      list.appendChild(el('div', { class: 'profile-book' }, [
+        el('div', null, [el('div', { class: 't', text: b.title }), el('div', { class: 'g', text: b.genre })]),
+        actionBtn('Read', function () { dlg.close(); openReader(b); })
+      ]));
+    });
+    box.appendChild(list);
+
+    if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+  }
+
+  /* ---------- Support links ---------- */
+  var SUPPORT_HOSTS = ['paystack.com', 'paystack.shop', 'flutterwave.com', 'selar.co', 'selar.com',
+    'buymeacoffee.com', 'ko-fi.com', 'paypal.me', 'patreon.com', 'gofund.me'];
+
+  function cleanSupportUrl(value) {
+    value = (value || '').trim();
+    if (!value) return '';
+    var u;
+    try { u = new URL(value); } catch (e) { return null; }
+    if (u.protocol !== 'https:' || value.length > 200) return null;
+    var host = u.hostname.toLowerCase();
+    var ok = SUPPORT_HOSTS.some(function (d) { return host === d || host.slice(-(d.length + 1)) === '.' + d; });
+    return ok ? u.href : null;
+  }
+
+  function supportWriter(name, url) {
+    var ok = window.confirm('Thank you for supporting ' + name + '!\n\nYou are about to leave Treeshelf. Treeshelf does not handle or guarantee this payment, so only pay people you trust.\n\nContinue?');
+    if (ok) window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  function tipCard(name, url) {
+    var emoji = el('span', { class: 'tip-emoji', 'aria-hidden': 'true' }, [
+      el('span', { class: 'cash c1', text: '\uD83D\uDCB5' }),
+      el('span', { class: 'cash c2', text: '\uD83D\uDCB5' }),
+      el('span', { class: 'hat', text: '\uD83C\uDFA9' })
+    ]);
+    return el('button', { type: 'button', class: 'tip-hat', 'aria-label': 'Support ' + name + ' with a tip', onclick: function () { supportWriter(name, url); } }, [
+      emoji,
+      el('span', { class: 'tip-text' }, [
+        el('strong', { text: 'Support ' + name }),
+        el('span', { text: 'Drop a tip in the hat. Every bit helps them keep writing.' })
+      ])
+    ]);
+  }
+
+  function tipPill(name, url) {
+    return el('button', {
+      type: 'button', class: 'heart-btn tip-btn', 'aria-label': 'Tip ' + name,
+      onclick: function () { supportWriter(name, url); }
+    }, [
+      el('span', { class: 'heart-icon', 'aria-hidden': 'true', text: '\uD83C\uDFA9' }),
+      el('span', { class: 'heart-count', text: 'Tip' })
+    ]);
+  }
+
+  /* ---------- Admin: banning users ---------- */
+  var iAmBanned = false;
+
+  function refreshBanState() {
+    if (!sb || !session) { iAmBanned = false; return; }
+    sb.rpc('is_banned').then(function (r) {
+      iAmBanned = !r.error && r.data === true;
+      if (iAmBanned) toast('Your account has been restricted. You can read, but not publish, comment or like.');
+    });
+  }
+
+  function askBan(who) {
+    if (!window.confirm('Ban ' + who + '? They will not be able to publish, comment or like.')) return null;
+    var reason = window.prompt('Reason for the ban (optional):');
+    if (reason === null) return null;
+    var wipe = window.confirm('Also delete all their comments and hide all their books?');
+    return { reason: reason.trim().slice(0, 300), wipe: wipe };
+  }
+
+  function reloadBooks() {
+    getAllBooks().then(function (b) { if (b) { uploaded = b; renderGrid(); } });
+  }
+
+  function banFromComment(book, c) {
+    var o = askBan(c.name);
+    if (!o) return;
+    sb.rpc('admin_ban_from_comment', { p_comment_id: c.id, p_why: o.reason, p_wipe: o.wipe }).then(function (r) {
+      if (r.error) { toast('Could not ban: ' + r.error.message); return; }
+      toast('User banned.');
+      fetchComments(book).then(function (rows) { if (rows && commentBook === book) renderComments(book, rows); });
+      if (o.wipe) reloadBooks();
+    });
+  }
+
+  function banFromBook(book) {
+    var o = askBan(book.author);
+    if (!o) return;
+    sb.rpc('admin_ban_from_book', { p_book_id: book.id, p_why: o.reason, p_wipe: o.wipe }).then(function (r) {
+      if (r.error) { toast('Could not ban: ' + r.error.message); return; }
+      toast('Writer banned.');
+      if (o.wipe) reloadBooks();
+    });
+  }
+
+  function loadBans() {
+    var box = $('#bans-body');
+    box.innerHTML = '';
+    sb.from('banned_users').select('user_id,label,reason,banned_at').order('banned_at', { ascending: false }).then(function (r) {
+      if (r.error || !r.data.length) return;
+      box.appendChild(el('h3', { class: 'bans-title', text: 'Banned accounts' }));
+      r.data.forEach(function (b) {
+        box.appendChild(el('div', { class: 'report-row' }, [
+          el('p', { class: 'report-title', text: b.label || 'Unnamed account' }),
+          el('p', { class: 'report-reason', text: b.reason ? 'Reason: ' + b.reason : 'No reason given' }),
+          el('p', { class: 'report-date', text: new Date(b.banned_at).toLocaleString() }),
+          el('div', { class: 'card-actions' }, [
+            actionBtn('Unban', function () {
+              sb.rpc('admin_unban', { p_target: b.user_id }).then(function (x) {
+                if (x.error) { toast('Could not unban.'); return; }
+                toast('Account unbanned.');
+                loadBans();
+              });
+            })
+          ])
+        ]));
+      });
+    });
+  }
+
+  /* ---------- Admin: reports panel ---------- */
   function loadReports() {
     var box = $('#reports-body');
     box.innerHTML = '';
     box.appendChild(el('p', { class: 'sub', text: 'Loading reports...' }));
-    sb.from('reports').select('id,reason,created_at,book_id,books(id,title,author)')
+    sb.from('reports').select('id,reason,created_at,book_id,comment_id,books(id,title,author),comments(id,body,name,hidden)')
       .order('created_at', { ascending: false }).then(function (r) {
         box.innerHTML = '';
         if (r.error) { box.appendChild(el('p', { class: 'sub', text: 'Could not load reports: ' + r.error.message })); return; }
@@ -962,6 +1734,14 @@
           var info = rep.books;
           var book = uploaded.filter(function (x) { return x.id === rep.book_id; })[0];
           var actions = [];
+          if (rep.comments && rep.comments.hidden) {
+            actions.push(actionBtn('Restore comment', function () { restoreComment(book, rep.comments, loadReports); }));
+          }
+          if (rep.comments) {
+            actions.push(actionBtn('Delete comment', function () {
+              sb.from('comments').delete().eq('id', rep.comments.id).then(loadReports);
+            }, false, true));
+          }
           if (book) {
             actions.push(actionBtn('Open', function () { $('#reports-dialog').close(); openReader(book); }));
             actions.push(actionBtn('Remove book', function () { removeBook(book, loadReports); }, false, true));
@@ -971,7 +1751,8 @@
           }));
           box.appendChild(el('div', { class: 'report-row' }, [
             el('p', { class: 'report-title', text: info ? info.title + ' by ' + info.author : 'Book already removed' }),
-            el('p', { class: 'report-reason', text: '\u201C' + rep.reason + '\u201D' }),
+            rep.comments ? el('p', { class: 'report-reason', text: 'Comment by ' + rep.comments.name + (rep.comments.hidden ? ' (auto-hidden)' : '') + ': \u201C' + rep.comments.body + '\u201D' }) : null,
+            el('p', { class: 'report-reason', text: 'Reason: ' + rep.reason }),
             el('p', { class: 'report-date', text: new Date(rep.created_at).toLocaleString() }),
             el('div', { class: 'card-actions' }, actions)
           ]));
@@ -1006,6 +1787,7 @@ function confirmPledge() {
     GENRES.forEach(function (g) { genreSelect.appendChild(el('option', { value: g, text: g })); });
     var errorBox = $('.form-error', form);
     var submitBtn = $('button[type="submit"]', form);
+    registerNameWidget(form.elements.author, $('.pen-field', form), $('.name-hint', form));
     var optionalSources = $all('.optional-source', form);
     form.elements.serial.addEventListener('change', function () {
       optionalSources.forEach(function (n) { n.hidden = form.elements.serial.checked; });
@@ -1019,9 +1801,11 @@ function confirmPledge() {
 
       if (!sb) { fail(backendMessage()); return; }
       if (!session) { fail('Log in or create a free writer account to publish.'); openAuth(); return; }
+      if (!requireUsername()) { fail('Your account needs a username first. Finish that step, then press Publish again.'); return; }
 
       var title = form.elements.title.value.trim();
       var author = form.elements.author.value.trim();
+      var penTyped = form.elements.newpen.value.trim().replace(/\s+/g, ' ');
       var text = form.elements.text.value.trim();
       var file = form.elements.file.files[0];
       var serial = form.elements.serial.checked;
@@ -1031,9 +1815,11 @@ function confirmPledge() {
       if (coverFile && coverFile.size > 10 * 1024 * 1024) { fail('The cover image is larger than 10 MB. Choose a smaller one.'); return; }
 
       if (!title) { fail('Add a title for your book.'); form.elements.title.focus(); return; }
-      if (!author) { fail('Add your name or a pen name.'); form.elements.author.focus(); return; }
+      if (!author && !penTyped) { fail('Type a pen name to publish under.'); form.elements.newpen.focus(); return; }
       if (!serial && !file && !text) { fail('Attach a file or write your story in the text box.'); return; }
 
+      if (penTyped && !NAME_RE.test(penTyped)) { fail('A pen name needs 3 to 24 letters or numbers. Spaces, dots, dashes and underscores are fine in the middle.'); return; }
+      if (penTyped && myNames.pens.length >= 2) { fail('You already have two pen names. Choose one from the list.'); return; }
       var meta = {
         title: title, author: author, genre: form.elements.genre.value,
         blurb: form.elements.blurb.value.trim(), type: serial ? 'chapters' : 'text', body: serial ? null : (text || null), fileName: null
@@ -1056,10 +1842,12 @@ function confirmPledge() {
       if (!accepted) return null;
       submitBtn.disabled = true;
       submitBtn.textContent = 'Publishing...';
-      return prep.then(function () {
+      var claim = penTyped ? claimName(penTyped, 'pen').then(function () { meta.author = penTyped; }) : Promise.resolve();
+      return claim.then(function () { return prep; }).then(function () {
         return coverFile ? resizeCover(coverFile).then(function (b) { coverBlob = b; }) : null;
       }).then(function () { return saveBook(meta, upload, coverBlob); }).then(function (book) {
         uploaded.unshift(book);
+        mineIds[book.id] = true;
         form.reset();
         renderGrid();
         toast('"' + book.title + '" is now on Explore.');
@@ -1078,13 +1866,32 @@ function confirmPledge() {
   }
 
   function initForms() {
+    var profileDlg = $('#profile-dialog'), profileEditDlg = $('#profile-edit-dialog');
+    $('#close-profile').addEventListener('click', function () { profileDlg.close(); });
+    profileDlg.addEventListener('click', function (e) { if (e.target === profileDlg) profileDlg.close(); });
+    $('#close-profile-edit').addEventListener('click', function () { profileEditDlg.close(); });
+    $('#profile-form').addEventListener('submit', function (e) { e.preventDefault(); saveProfile(); });
+
+    var nameDlg = $('#name-dialog');
+    $('#close-name').addEventListener('click', function () { nameDlg.close(); });
+    $('#name-form').addEventListener('submit', function (e) { e.preventDefault(); saveName(); });
+
+    var commentsDlg = $('#comments-dialog');
+    $('#close-comments').addEventListener('click', function () { commentsDlg.close(); });
+    commentsDlg.addEventListener('click', function (e) { if (e.target === commentsDlg) commentsDlg.close(); });
+    $('#comment-login').addEventListener('click', function () { openAuth(); });
+    $('#comment-form').addEventListener('submit', function (e) { e.preventDefault(); postComment(); });
+
+    $('#show-more').addEventListener('click', function () { visibleCount += PAGE_SIZE; renderGrid(); });
+
     var reportsDlg = $('#reports-dialog');
-    $('#open-reports').addEventListener('click', function () { if (typeof reportsDlg.showModal === 'function') { reportsDlg.showModal(); loadReports(); } });
+    $('#open-reports').addEventListener('click', function () { if (typeof reportsDlg.showModal === 'function') { reportsDlg.showModal(); loadReports(); loadBans(); } });
     $('#close-reports').addEventListener('click', function () { reportsDlg.close(); });
     reportsDlg.addEventListener('click', function (e) { if (e.target === reportsDlg) reportsDlg.close(); });
     $all('.chip').forEach(function (chip) {
       chip.addEventListener('click', function () {
         sortMode = chip.getAttribute('data-sort');
+        visibleCount = PAGE_SIZE;
         $all('.chip').forEach(function (c) { c.classList.toggle('active', c === chip); });
         renderGrid();
       });
@@ -1114,16 +1921,22 @@ function confirmPledge() {
     initNavigation();
     initReader();
     initForms();
-    $('#search').addEventListener('input', renderGrid);
-    $('#genre-filter').addEventListener('change', renderGrid);
+    $('#search').addEventListener('input', function () { visibleCount = PAGE_SIZE; renderGrid(); });
+    $('#genre-filter').addEventListener('change', function () { visibleCount = PAGE_SIZE; renderGrid(); });
 
     if (window.supabase && cfg.SUPABASE_URL && cfg.SUPABASE_URL.indexOf('YOUR-PROJECT') === -1) {
       sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
     }
+    if (sb) {
+      var cachedRows = readBookCache();
+      if (cachedRows) uploaded = cachedRows.map(rowToBook);
+    }
     initAuth();
-    Promise.all([getAllBooks(), loadRemovedSamples()]).then(function (results) {
-      uploaded = results[0];
+    Promise.all([getAllBooks(), loadRemovedSamples(), loadProfiles()]).then(function (results) {
+      if (results[0]) uploaded = results[0];
       renderGrid();
+      var wm = /#writer=([^&]+)/.exec(location.hash);
+      if (wm) { try { openProfile(decodeURIComponent(wm[1])); } catch (e) { /* bad link */ } }
       var m = /#book=([\w-]+)/.exec(location.hash);
       if (m) {
         var found = uploaded.filter(function (b) { return b.id === m[1]; })[0];

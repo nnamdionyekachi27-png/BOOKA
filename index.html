@@ -5,10 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Treeshelf | A hub for amateur writers and the people who read them</title>
   <meta name="description" content="Read and share amateur books, stories and poems. Upload a PDF or Word file and let readers find it.">
+  <meta name="theme-color" content="#1f4e5f">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Treeshelf">
+  <meta property="og:title" content="Treeshelf | Cozy reads from amateur writers">
+  <meta property="og:description" content="Read and share books, stories and poems written by amateur writers. No sign-up needed to read.">
+  <meta property="og:image" content="https://booka-reads.netlify.app/share.jpeg">
+  <meta property="og:url" content="https://booka-reads.netlify.app/">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="preconnect" href="https://dsigjiuemndfydfedeae.supabase.co" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="preload" as="image" href="read.jpeg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="lines.css?v=7">
+  <link rel="stylesheet" href="lines.css?v=13">
 </head>
 <body>
 
@@ -69,6 +80,7 @@
         <ul>
           <li><strong>Upload a file.</strong> PDF, Word (.docx) and plain text files are all supported. Use PDF when layout matters, and Word or text when you want readers to be able to resize the text.</li>
           <li><strong>Or write it here.</strong> No finished file yet? Paste or type your chapter into the box. It will be shown to readers as a clean, readable page.</li>
+          <li><strong>Add a profile, if you want one.</strong> Each of your names can have its own short bio and photo. It is completely optional, and you can add it any time. Readers can click a writer&rsquo;s name on a book to see it.</li>
           <li><strong>Add a cover.</strong> Upload a cover image and it will appear on your book&rsquo;s card on Explore. It is resized automatically, so a photo straight from your phone is fine.</li>
           <li><strong>Publish a novel chapter by chapter.</strong> Tick the chapter option when you publish, then add chapters whenever they are ready. Readers can jump between chapters, and you can edit or reorder them at any time.</li>
           <li><strong>Choose how you appear.</strong> Use your real name or a pen name. It is your decision.</li>
@@ -100,6 +112,7 @@
           <li>Upload only work you wrote yourself or have permission to share. Copying another author&rsquo;s book is not allowed.</li>
           <li>Keep content suitable for a general audience. Sexually explicit material is not allowed, and our admins may remove any book that breaks these rules.</li>
           <li>If you tell an author what you think, tell them what worked first, then what could grow. Everyone here is learning.</li>
+          <li>Your username is only for comments. Writers publish under up to two pen names. Names cannot be changed, so choose carefully.</li>
           <li>Respect authors&rsquo; credit. If you share a book with a friend, share the name of its writer too.</li>
         </ul>
 
@@ -167,12 +180,14 @@
 
       <div class="chips" role="group" aria-label="Browse books">
         <button type="button" class="chip active" data-sort="all">All books</button>
+        <button type="button" class="chip" data-sort="recent">Continue reading</button>
         <button type="button" class="chip" data-sort="new">New this week</button>
         <button type="button" class="chip" data-sort="reads">Most read</button>
         <button type="button" class="chip" data-sort="likes">Most loved</button>
       </div>
 
       <div class="grid" id="book-grid" aria-live="polite"></div>
+      <div class="more-wrap" id="more-wrap" hidden><button type="button" class="btn" id="show-more">Show more books</button></div>
       <p class="empty" id="empty" hidden>No books match that search. Try a different word or choose All genres.</p>
     </section>
 
@@ -186,6 +201,12 @@
           </div>
         </div>
         <div id="write-form-slot"></div>
+
+        <section class="profile-section" aria-labelledby="my-profiles-title">
+          <h2 id="my-profiles-title">Your writer profiles <span class="optional">Optional</span></h2>
+          <p class="sub">Add a short bio and a photo so readers can get to know you. You can skip this and come back whenever you like. You can write and publish books without a profile.</p>
+          <div id="my-profiles"></div>
+        </section>
       </div>
     </section>
 
@@ -237,6 +258,69 @@
     </form>
   </dialog>
 
+  <!-- Writer profile (public) -->
+  <dialog id="profile-dialog" aria-label="Writer profile">
+    <div class="dialog-head">
+      <span></span>
+      <button type="button" class="icon-btn" id="close-profile" aria-label="Close">&times;</button>
+    </div>
+    <div id="profile-body"></div>
+  </dialog>
+
+  <!-- Edit a profile -->
+  <dialog id="profile-edit-dialog" aria-labelledby="profile-edit-title">
+    <div class="dialog-head">
+      <h2 id="profile-edit-title">Your profile</h2>
+      <button type="button" class="icon-btn" id="close-profile-edit" aria-label="Close">&times;</button>
+    </div>
+    <p class="auth-intro">Everything here is optional. You can leave it and come back any time.</p>
+    <form class="book-form" id="profile-form" novalidate>
+      <label class="field"><span class="field-label">Short bio (up to 500 characters)</span>
+        <textarea name="bio" rows="5" maxlength="500" placeholder="Tell readers who you are and what you write"></textarea></label>
+      <label class="field"><span class="field-label">Photo (optional)</span>
+        <input type="file" name="photo" accept="image/*"></label>
+      <label class="field"><span class="field-label">Support link (optional)</span>
+        <input type="text" name="support" maxlength="200" placeholder="https://paystack.com/pay/your-name"></label>
+      <p class="name-hint">Paste your payment link here. Readers will not see the link itself. They will see a hat they can tap to tip you. Treeshelf does not handle or take a share of any payment. Accepted: Paystack, Flutterwave, Selar, Buy Me a Coffee, Ko-fi, PayPal.me, Patreon and GoFundMe.</p>
+      <label class="check" id="remove-photo-row" hidden>
+        <input type="checkbox" id="remove-photo"><span>Remove my current photo</span></label>
+      <p class="form-error" id="profile-msg" role="alert" hidden></p>
+      <button type="submit" class="btn btn-primary" id="profile-save">Save profile</button>
+    </form>
+  </dialog>
+
+  <!-- Choose a username or pen name -->
+  <dialog id="name-dialog" aria-labelledby="name-title">
+    <div class="dialog-head">
+      <h2 id="name-title">Choose your username</h2>
+      <button type="button" class="icon-btn" id="close-name" aria-label="Close">&times;</button>
+    </div>
+    <p class="auth-intro" id="name-intro"></p>
+    <form class="book-form" id="name-form" novalidate>
+      <label class="field"><span class="field-label" id="name-label">Username</span>
+        <input type="text" name="name" maxlength="24" autocomplete="off" placeholder="For example: InkAndAsh"></label>
+      <p class="form-error" id="name-msg" role="alert" hidden></p>
+      <button type="submit" class="btn btn-primary" id="name-submit">Save username</button>
+    </form>
+  </dialog>
+
+  <!-- Comments -->
+  <dialog id="comments-dialog" aria-labelledby="comments-title">
+    <div class="dialog-head">
+      <h2 id="comments-title">Comments</h2>
+      <button type="button" class="icon-btn" id="close-comments" aria-label="Close">&times;</button>
+    </div>
+    <div class="comments-list" id="comments-list"></div>
+    <p class="comment-gate" id="comment-gate" hidden>Log in to join the conversation. <button type="button" class="link-btn" id="comment-login">Log in</button></p>
+    <form class="comment-form" id="comment-form" novalidate hidden>
+      <p class="commenting-as" id="commenting-as"></p>
+      <label class="field"><span class="field-label">Your comment</span>
+        <textarea name="body" rows="3" maxlength="500" placeholder="Say something kind and helpful"></textarea></label>
+      <p class="form-error" id="comment-msg" role="alert" hidden></p>
+      <button type="submit" class="btn btn-primary" id="comment-submit">Post comment</button>
+    </form>
+  </dialog>
+
   <!-- Admin: reported books -->
   <dialog id="reports-dialog" aria-labelledby="reports-title">
     <div class="dialog-head">
@@ -244,6 +328,7 @@
       <button type="button" class="icon-btn" id="close-reports" aria-label="Close">&times;</button>
     </div>
     <div id="reports-body"></div>
+    <div id="bans-body"></div>
   </dialog>
 
   <!-- Pledge shown before publishing -->
@@ -278,6 +363,11 @@
         <p id="reader-author"></p>
       </div>
       <div class="reader-tools">
+        <div class="theme-switch" role="group" aria-label="Reading theme">
+          <button type="button" class="active" data-theme="light" aria-pressed="true">Light</button>
+          <button type="button" data-theme="sepia" aria-pressed="false">Sepia</button>
+          <button type="button" data-theme="dark" aria-pressed="false">Dark</button>
+        </div>
         <button type="button" class="btn btn-small" id="font-down" aria-label="Smaller text">A&minus;</button>
         <button type="button" class="btn btn-small" id="font-up" aria-label="Larger text">A+</button>
         <a class="btn btn-small" id="reader-download" hidden>Download</a>
@@ -297,9 +387,14 @@
         <input type="text" name="title" maxlength="80" required placeholder="The name of your book">
       </label>
       <label class="field">
-        <span class="field-label">Author or pen name</span>
-        <input type="text" name="author" maxlength="60" required placeholder="How readers will see your name">
+        <span class="field-label">Publish under your pen name</span>
+        <select name="author"></select>
       </label>
+      <label class="field pen-field">
+        <span class="field-label">Or type a new pen name (optional)</span>
+        <input type="text" name="newpen" maxlength="24" autocomplete="off" placeholder="Leave empty to use the name chosen above">
+      </label>
+      <p class="name-hint"></p>
       <label class="field">
         <span class="field-label">Genre</span>
         <select name="genre" required></select>
@@ -329,10 +424,9 @@
     </form>
   </template>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
   <script src="config.js?v=3"></script>
-  <script src="draw.js?v=7"></script>
+  <script src="draw.js?v=13"></script>
 </body>
 </html>
